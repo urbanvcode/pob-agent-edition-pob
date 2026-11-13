@@ -17,7 +17,9 @@ end
 
 function ChatOptions.addBackendRow(controls, anchor, x, y, labelSpacing)
 	local current = Chat.settings().backend
-	controls.agentChatBackend = new("DropDownControl", { "TOPLEFT", anchor, "TOPLEFT" }, { x, y, 170, 18 }, backendList(), nil)
+	controls.agentChatBackend = new("DropDownControl", { "TOPLEFT", anchor, "TOPLEFT" }, { x, y, 170, 18 }, backendList(), function(index, value)
+		if controls.agentChatModel then ChatOptions.fillModels(controls, value.value) end
+	end)
 	controls.agentChatBackend:SelByValue(current, "value")
 	controls.agentChatBackendLabel = new("LabelControl", { "RIGHT", controls.agentChatBackend, "LEFT" }, { labelSpacing, 0, 0, 16 }, "^7AI chat backend:")
 	local tip = { "The AI chat panel (right edge of the build screen) runs one of these.", "Every backend uses the same PoB tools and rules as your AI apps." }
@@ -37,6 +39,30 @@ function ChatOptions.addBackendRow(controls, anchor, x, y, labelSpacing)
 	controls.agentChatLogin.tooltipText = "Opens a window that runs the CLI's own sign-in\n(claude auth login / codex login) with your subscription account.\nPoB never sees your password or tokens."
 end
 
+-- The model list follows the backend picked above; choices are kept per backend until Save.
+local picked = { }
+function ChatOptions.fillModels(controls, backend)
+	local list = { }
+	for _, m in ipairs(Chat.MODELS[backend] or Chat.MODELS.claude) do t_insert(list, { label = m.label, value = m.value, desc = m.desc }) end
+	controls.agentChatModel.list = list
+	controls.agentChatModel.backend = backend
+	controls.agentChatModel:SelByValue(picked[backend] or Chat.model(backend).value, "value")
+end
+
+function ChatOptions.addModelRow(controls, anchor, x, y, labelSpacing)
+	picked = { }
+	controls.agentChatModel = new("DropDownControl", { "TOPLEFT", anchor, "TOPLEFT" }, { x, y, 250, 18 }, { }, function(index, value)
+		picked[controls.agentChatModel.backend] = value.value
+	end)
+	controls.agentChatModelLabel = new("LabelControl", { "RIGHT", controls.agentChatModel, "LEFT" }, { labelSpacing, 0, 0, 16 }, "^7AI chat model:")
+	controls.agentChatModel.tooltipFunc = function(tip)
+		tip:Clear()
+		tip:AddLine(14, "^7Model for the backend above. The default is the balanced one, not the most expensive.")
+		for _, m in ipairs(controls.agentChatModel.list) do tip:AddLine(14, "^7" .. m.label .. ": ^8" .. m.desc) end
+	end
+	ChatOptions.fillModels(controls, controls.agentChatBackend:GetSelValueByKey("value") or Chat.settings().backend)
+end
+
 function ChatOptions.addKeyRow(controls, anchor, x, y, labelSpacing)
 	controls.agentChatKey = new("EditControl", { "TOPLEFT", anchor, "TOPLEFT" }, { x, y, 290, 18 }, "", nil, "%s", 200)
 	controls.agentChatKey:SetPlaceholder(Chat.hasApiKey() and "stored (hidden)" or "not set")
@@ -52,6 +78,7 @@ function ChatOptions.addKeyRow(controls, anchor, x, y, labelSpacing)
 	-- Called by the Options Save button.
 	return function()
 		Chat.setSetting("backend", controls.agentChatBackend:GetSelValueByKey("value") or "claude")
+		for backend, value in pairs(picked) do Chat.setModel(backend, value) end
 		local key = controls.agentChatKey.buf
 		if key:match("%S") then Chat.setApiKey(key) end
 		Chat.check = nil

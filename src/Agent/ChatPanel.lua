@@ -279,7 +279,8 @@ controls.backend.tooltipFunc = function(tip)
 	tip:Clear()
 	local e = Chat.BACKENDS[backendIndex()]
 	tip:AddLine(14, "^7" .. e.desc)
-	tip:AddLine(14, "^8More in Options > AI chat (sign in, API key).")
+	tip:AddLine(14, "^7Model: " .. Chat.model(e.value).label .. " - " .. Chat.model(e.value).desc)
+	tip:AddLine(14, "^8Model, sign in and API key: Options > AI chat.")
 end
 controls.backend.enabled = function() return not Chat.busy end
 controls.edits = new("CheckBoxControl", nil, { 0, 0, 18 }, "AI may edit:", function(on) Chat.setSetting("allowEdits", on) end)
@@ -370,7 +371,7 @@ function Panel.draw(build, inputEvents)
 	elseif note then
 		statusText, statusCol = note, noteCol
 	else
-		statusText, statusCol = "Sees the open build, profile and guide. Enter sends.", col.muted
+		statusText, statusCol = "Model: " .. Chat.model().label .. ". Sees the open build, profile, guide.", col.muted
 	end
 	Viz.text(ix + 10, inputY + 6, "LEFT", 13, "VAR", Viz.fit(13, "VAR", statusText, iw - 20), statusCol)
 

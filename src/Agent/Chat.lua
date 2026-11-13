@@ -20,6 +20,43 @@ Chat.BACKENDS = {
 	{ value = "codex", label = "Codex", desc = "OpenAI Codex CLI with your own ChatGPT login. Sign in once with the Sign in button." },
 	{ value = "api", label = "Anthropic API key", desc = "Anthropic Messages API with your own API key (billed per token by Anthropic)." },
 }
+-- Models per backend, first = default. The default is the mid-priced model, never the most
+-- expensive one; agent-mcp/src/chat/backends.ts DEFAULT_MODELS must name the same defaults.
+Chat.MODELS = {
+	claude = {
+		{ value = "sonnet", label = "Sonnet (balanced)", desc = "Default. Good with PoB's tools, uses less of your Claude quota than Opus." },
+		{ value = "haiku", label = "Haiku (cheapest)", desc = "Fastest and uses the least quota; weaker on long build analyses." },
+		{ value = "opus", label = "Opus (strongest)", desc = "Best answers, uses the most of your Claude quota." },
+	},
+	codex = {
+		{ value = "gpt-6.1-sol", label = "GPT-6.1-Sol (balanced)", desc = "Default. Codex's everyday model, run with low reasoning effort." },
+		{ value = "gpt-6-luna", label = "GPT-6-Luna (cheapest)", desc = "Fast and affordable; weaker on long build analyses." },
+		{ value = "gpt-6-astra", label = "GPT-6-Astra (strongest)", desc = "Frontier model, uses the most of your Codex quota." },
+	},
+	api = {
+		{ value = "claude-sonnet-5-5", label = "Sonnet 5.5 (balanced)", desc = "Default. $2 / $10 per million input / output tokens." },
+		{ value = "claude-haiku-5-5", label = "Haiku 5.5 (cheapest)", desc = "$0.10 / $0.50 per million tokens; weaker on long analyses." },
+		{ value = "claude-opus-5-5", label = "Opus 5.5 (strongest)", desc = "$4 / $20 per million tokens." },
+	},
+}
+
+-- The chosen model of a backend (a value from Chat.MODELS), else its default.
+function Chat.model(backend)
+	local s = Chat.settings()
+	backend = backend or s.backend
+	local list = Chat.MODELS[backend] or Chat.MODELS.claude
+	local chosen = type(s.models) == "table" and s.models[backend]
+	for _, m in ipairs(list) do if m.value == chosen then return m end end
+	return list[1]
+end
+
+function Chat.setModel(backend, value)
+	local models = Chat.settings().models
+	models = type(models) == "table" and models or { }
+	models[backend] = value
+	Chat.setSetting("models", models)
+end
+
 Chat.QUICK = {
 	{ label = "Why am I dying?", text = "Why am I dying? Check my defences and tell me the top fixes." },
 	{ label = "Next upgrade", text = "What is my best next upgrade for my budget and play mode?" },
@@ -226,6 +263,7 @@ function Chat.send(build, text)
 		context = Chat.context(build),
 		session = Chat.sessions[s.backend],
 		allowEdits = s.allowEdits,
+		model = Chat.model(s.backend).value,
 		port = launch.agentServer and launch.agentServer.server and launch.agentServer.port or nil,
 	}
 	local err
