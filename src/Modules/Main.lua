@@ -969,6 +969,16 @@ function main:OpenOptionsPopup(savedState)
 	end
 	controls.buildPath.tooltipText = "Overrides the default save location for builds.\nThe default location is: '"..self.defaultBuildPath.."'"
 
+	if launch.agentEdition then
+		-- Agent Edition: trade session id shared with AI tools (stored in AgentEdition.json, read by pob-mcp)
+		nextRow()
+		local agentSettings = LoadModule("Agent/Settings")
+		controls.tradeSessionId = new("EditControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 290, 18 }, agentSettings.get(self.userPath, "POESESSID") or "", nil, "%w", 64)
+		controls.tradeSessionId:SetProtected(true)
+		controls.tradeSessionIdLabel = new("LabelControl", { "RIGHT", controls.tradeSessionId, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Trade session ID (POESESSID):")
+		controls.tradeSessionId.tooltipText = "Agent Edition: your pathofexile.com POESESSID cookie.\nAI tools use it for weighted trade searches.\nIt works like a password: anyone with it is logged in as you.\nLeave empty to remove it. Logging out on the website invalidates it."
+	end
+
 	nextRow()
 	controls.nodePowerTheme = new("DropDownControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 100, 18 }, {
 		{ label = "Red & Blue", theme = "RED/BLUE" },
@@ -1185,6 +1195,9 @@ function main:OpenOptionsPopup(savedState)
 			launch.proxyURL = controls.proxyType.list[controls.proxyType.selIndex].scheme .. "://" .. controls.proxyURL.buf
 		else
 			launch.proxyURL = nil
+		end
+		if controls.tradeSessionId then
+			LoadModule("Agent/Settings").set(self.userPath, "POESESSID", controls.tradeSessionId.buf)
 		end
 		if controls.buildPath.buf:match("%S") then
 			self.buildPath = controls.buildPath.buf
