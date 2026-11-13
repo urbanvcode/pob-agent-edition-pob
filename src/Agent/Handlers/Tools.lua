@@ -979,3 +979,6 @@ loadfile(DIR .. 'Farming.lua')(handlers, Ops, { num = num, dpsOf = dpsOf, recalc
 
 -- Crafting helper: mod pools with spawn weights, target items (Stage 6)
 loadfile(DIR .. 'Craft.lua')(handlers, Ops, { strip = strip })
+
+-- Create a build: item targets, cost per stage, what PoB does not model (Stage 11)
+loadfile(DIR .. 'Create.lua')(handlers, Ops, { strip = strip })

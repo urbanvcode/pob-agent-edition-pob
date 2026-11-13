@@ -100,6 +100,41 @@ local function amount(v)
 	return math.floor(v + 0.5)
 end
 
+-- Build preferences from the "Create a build" interview (Stage 11). Keep in sync
+-- with agent-mcp/src/profile.ts (PREFERENCE_CHOICES / normalizePreferences).
+AgentSettings.PREFERENCE_CHOICES = {
+	content = { "clear", "bossing", "both" },
+	defence = { "tanky", "balanced", "glass" },
+	buttons = { "few", "some", "many" },
+	pace = { "big_hits", "fast_hits", "any" },
+	novelty = { "proven", "new", "any" },
+	start = { "league_start", "mid_league" },
+}
+AgentSettings.PLAYSTYLES = { "melee", "ranged", "spells", "minions", "totems", "traps", "mines", "dot", "hits" }
+
+local function oneOfList(list, value)
+	for _, v in ipairs(list) do
+		if v == value then return value end
+	end
+	return ""
+end
+
+function AgentSettings.normalizePreferences(p)
+	p = type(p) == "table" and p or { }
+	local out = { playstyle = { }, exclude = stringList(p.exclude), likes = stringList(p.likes) }
+	for _, v in ipairs(stringList(p.playstyle)) do
+		if oneOfList(AgentSettings.PLAYSTYLES, v:lower()) ~= "" then table.insert(out.playstyle, v:lower()) end
+	end
+	for key, list in pairs(AgentSettings.PREFERENCE_CHOICES) do
+		out[key] = oneOfList(list, p[key])
+	end
+	local hours = tonumber(p.hours)
+	out.hours = (hours and hours > 0) and math.floor(hours + 0.5) or 0
+	out.budget = trim(p.budget)
+	out.updated = type(p.updated) == "string" and p.updated or nil
+	return out
+end
+
 -- Complete profile with defaults filled in (never nil fields).
 function AgentSettings.normalizeProfile(p)
 	p = type(p) == "table" and p or { }
@@ -118,6 +153,7 @@ function AgentSettings.normalizeProfile(p)
 		experience = valid(AgentSettings.EXPERIENCE, p.experience) and p.experience or "poe2",
 		explanationMode = valid(AgentSettings.EXPLANATION_MODES, p.explanationMode) and p.explanationMode or "teach",
 		learnedTopics = stringList(p.learnedTopics),
+		preferences = AgentSettings.normalizePreferences(p.preferences),
 		updated = type(p.updated) == "string" and p.updated or nil,
 	}
 end
