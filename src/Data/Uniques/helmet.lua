@@ -188,9 +188,12 @@ The Hallowed Monarch
 Faithful Helmet
 Source: Drops from unique{Uber Incarnation of Dread} in normal{Moment of Reverence}
 Requires Level 73, 101 Str, 101 Int
+Variant: Pre 3.30.0
+Variant: Current
 (150-230)% increased Armour
 +(25-35)% to all Elemental Resistances
-50% increased Light Radius
+{variant:1}50% increased Light Radius
+{variant:2}(25-35)% increased Light Radius
 Link Skills can target Damageable Minions
 Your Linked Minions take (65-75)% less Damage
 On Killing a Rare monster, a random Linked Minion gains its Modifiers for 60 seconds
