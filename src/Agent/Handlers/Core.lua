@@ -357,4 +357,7 @@ end
 -- Agent Edition tools (summary, diagnose, edits, what-if, suggestions)
 loadfile(ADAPTER_DIR .. 'Tools.lua')(handlers, BuildOps, op, ADAPTER_DIR)
 
+-- Guide mode (Stage 3): guide stages, guide data, gap to a guide stage
+loadfile(ADAPTER_DIR .. 'Guide.lua')(handlers, BuildOps)
+
 return handlers, BuildOps
