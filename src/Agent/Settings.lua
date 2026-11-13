@@ -106,6 +106,7 @@ function AgentSettings.normalizeProfile(p)
 	local cur = type(p.currency) == "table" and p.currency or { }
 	return {
 		playMode = valid(AgentSettings.PLAY_MODES, p.playMode) and p.playMode or "trade",
+		hardcore = p.hardcore == true,
 		league = trim(p.league),
 		currency = {
 			chaos = amount(cur.chaos),

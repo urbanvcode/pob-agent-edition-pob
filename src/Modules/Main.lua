@@ -1203,6 +1203,9 @@ function main:OpenOptionsPopup(savedState)
 		controls.agentPlayModeLabel = new("LabelControl", { "RIGHT", controls.agentPlayMode, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Play mode:")
 		controls.agentPlayMode.tooltipText = choiceTooltip("How you get items. The AI adapts every suggestion to it.", agentSettings.PLAY_MODES)
 		controls.agentPlayMode:SelByValue(profile.playMode, "value")
+		controls.agentHardcore = new("CheckBoxControl", { "LEFT", controls.agentPlayMode, "RIGHT" }, { 90, 0, 18 }, "^7Hardcore:", nil)
+		controls.agentHardcore.tooltipText = "Hardcore: a character that dies is moved to the softcore league and can't play in Hardcore again.\nThe AI then puts defences first and uses the Hardcore trade league."
+		controls.agentHardcore.state = profile.hardcore
 
 		nextRow()
 		controls.agentLeague = new("EditControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 220, 18 }, profile.league, nil, nil, 50)
@@ -1267,6 +1270,7 @@ function main:OpenOptionsPopup(savedState)
 		saveAgentProfile = function()
 			local fields = {
 				playMode = controls.agentPlayMode:GetSelValueByKey("value"),
+				hardcore = controls.agentHardcore.state and true or false,
 				league = controls.agentLeague.buf,
 				currency = {
 					chaos = tonumber(controls.agentChaos.buf) or 0,

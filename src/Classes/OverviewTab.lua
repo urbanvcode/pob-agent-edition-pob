@@ -213,6 +213,8 @@ function OverviewTabClass:ProfileChips()
 	local chips = {
 		{ id = "pfMode", label = AgentSettings.label(AgentSettings.PLAY_MODES, p.playMode), c = MODE_COLOURS[p.playMode] or col.accent,
 			tip = { "^7Play mode: " .. AgentSettings.label(AgentSettings.PLAY_MODES, p.playMode), "^8" .. (desc(AgentSettings.PLAY_MODES, p.playMode) or "") } },
+		{ id = "pfHardcore", label = p.hardcore and "Hardcore" or "Softcore", c = p.hardcore and col.bad or col.muted,
+			tip = { "^7" .. (p.hardcore and "Hardcore: one death moves the character to softcore. The AI puts defences first." or "Softcore: deaths only cost experience.") } },
 		{ id = "pfLeague", label = p.league ~= "" and p.league or "Current league", c = col.text,
 			tip = { "^7League: " .. (p.league ~= "" and p.league or "not set (AI uses the current challenge league)") } },
 		{ id = "pfCurrency", label = #currency > 0 and table.concat(currency, "  ") or "Currency: not set", c = #currency > 0 and col.lightning or col.muted,
