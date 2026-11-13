@@ -973,3 +973,6 @@ loadfile(DIR .. 'Optimise.lua')(handlers, Ops, {
 
 -- Economy: own items and what to look for (Stage 5)
 loadfile(DIR .. 'Economy.lua')(handlers, Ops, { strip = strip })
+
+-- Crafting helper: mod pools with spawn weights, target items (Stage 6)
+loadfile(DIR .. 'Craft.lua')(handlers, Ops, { strip = strip })
