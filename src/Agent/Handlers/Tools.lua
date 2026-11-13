@@ -970,3 +970,6 @@ loadfile(DIR .. 'Optimise.lua')(handlers, Ops, {
 	num = num, dpsOf = dpsOf, pctChange = pctChange, strip = strip, recalc = recalc, assumptions = assumptions, mainSkillName = mainSkillName,
 	capture = capture, restore = restore, applyOps = applyOps, passiveOptions = passiveOptions, treeSummary = treeSummary,
 })
+
+-- Economy: own items and what to look for (Stage 5)
+loadfile(DIR .. 'Economy.lua')(handlers, Ops, { strip = strip })
