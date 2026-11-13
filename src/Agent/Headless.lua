@@ -23,6 +23,8 @@ print = function(...)
 	io.stderr:write(table.concat(parts, '\t'), '\n')
 end
 
+-- HeadlessWrapper hides lcurl from require(); tree packs (Agent/TreePacks.lua) need it, so keep the real one.
+AgentRealRequire = require
 dofile('HeadlessWrapper.lua')
 
 -- HeadlessWrapper's MakeDir does nothing; tree packs (Agent/TreePacks.lua) need real folders.

@@ -93,8 +93,10 @@ end
 local DOWNLOAD_SCRIPT = [[
 local dir, source, ver, spec, userAgent, proxy, progressName = ...
 local progressFn = progressName and _G[progressName]
-local curl = require("lcurl.safe")
-local sha2 = require("sha2")
+local req = AgentRealRequire or require  -- the headless wrapper hides lcurl from require()
+local curl = req("lcurl.safe")
+local sha2 = req("sha2")
+if not curl then return nil, "no HTTP library (lcurl)" end
 local files = { }
 for line in spec:gmatch("[^\n]+") do
 	local p, s, h = line:match("^(.-)|(%d+)|(%x+)$")
@@ -186,7 +188,10 @@ end
 function TreePacks.Ensure(ver)
 	if not TreePacks.Missing(ver) then return end
 	local ok, err = TreePacks.Download(ver)
-	if not ok then error(TreePacks.OfflineMessage(ver, err), 0) end
+	if not ok then
+		ConPrintf("[Agent] tree pack %s failed: %s", ver, tostring(err))
+		error(TreePacks.OfflineMessage(ver, err), 0)
+	end
 end
 
 -- Progress from the background thread (LaunchSubScript sub call, looked up in _G)

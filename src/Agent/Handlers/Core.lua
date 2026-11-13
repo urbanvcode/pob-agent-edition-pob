@@ -145,6 +145,12 @@ end
 handlers.load_build_xml = function(params)
   if not params or type(params.xml) ~= 'string' then return { ok = false, error = 'missing xml' } end
   if not _G.loadBuildFromXML then return { ok = false, error = 'headless wrapper not initialized' } end
+  -- Tree packs (Agent/TreePacks.lua): fetch missing trees first, so a failure is a clear error, not a half-loaded build
+  local TreePacks = LoadModule('Agent/TreePacks')
+  for _, ver in ipairs(TreePacks.MissingInXml(params.xml)) do
+    local okTree, treeErr = TreePacks.Download(ver)
+    if not okTree then return { ok = false, error = (TreePacks.OfflineMessage(ver, treeErr):gsub('%s*\n%s*', ' ')) } end
+  end
   local ok, err = pcall(_G.loadBuildFromXML, params.xml, (params.name and tostring(params.name)) or 'API Build')
   if not ok then return { ok = false, error = tostring(err) } end
   -- PoB can close the build or stop at a conversion popup without throwing.
