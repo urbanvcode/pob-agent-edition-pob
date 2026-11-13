@@ -1288,12 +1288,25 @@ function buildMode:OnFrame(inputEvents)
 
 	-- Update contents of main skill dropdowns
 	self:RefreshSkillSelectControls(self.controls, self.mainSocketGroup, "")
+	-- Agent Edition: AI chat panel docked on the right (Agent/ChatPanel.lua); drawn first so it gets its input
+	local chatWidth = 0
+	if launch.agentEdition and self.agentChatPanel == nil then
+		local okPanel, panel = pcall(LoadModule, "Agent/ChatPanel")
+		self.agentChatPanel = okPanel and panel or false
+		if not okPanel then ConPrintf("[Agent] chat panel: %s", tostring(panel)) end
+	end
+	if self.agentChatPanel then
+		pcall(main.agentChat.tick)
+		chatWidth = self.agentChatPanel.width()
+		local errMsg = PCall(self.agentChatPanel.draw, self, inputEvents)
+		if errMsg then ConPrintf("[Agent] chat panel: %s", errMsg) SetViewport() SetDrawLayer(0) end
+	end
 	-- Draw contents of current tab
 	local sideBarWidth = 312
 	local tabViewPort = {
 		x = sideBarWidth,
 		y = 32,
-		width = main.screenW - sideBarWidth,
+		width = main.screenW - sideBarWidth - chatWidth,
 		height = main.screenH - 32
 	}
 	if self.viewMode == "IMPORT" then

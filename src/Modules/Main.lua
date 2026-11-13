@@ -888,7 +888,7 @@ function main:OpenOptionsPopup(savedState)
 	-- NOTE: Height needs to be adjusted if more menu options are added
 	local oneColumnHeightReq = 850 -- Min height required to not split menu into two columns
 	if launch.agentEdition then
-		oneColumnHeightReq = oneColumnHeightReq + 26 * 11 -- Trade session ID row + Agent profile section
+		oneColumnHeightReq = oneColumnHeightReq + 26 * 13 -- Trade session ID row + Agent profile section + AI chat rows
 	end
 	local columnWidth = 600
 	
@@ -1015,6 +1015,12 @@ function main:OpenOptionsPopup(savedState)
 				end
 			end)
 		end)
+		-- Agent Edition: AI chat backend and API key (Agent/ChatOptions.lua)
+		local chatOptions = LoadModule("Agent/ChatOptions")
+		nextRow()
+		chatOptions.addBackendRow(controls, controls.sectionAnchor, currentX + defaultLabelPlacementX, currentY, defaultLabelSpacingPx)
+		nextRow()
+		self.agentChatOptionsSave = chatOptions.addKeyRow(controls, controls.sectionAnchor, currentX + defaultLabelPlacementX, currentY, defaultLabelSpacingPx)
 	end
 
 	nextRow()
@@ -1353,6 +1359,7 @@ function main:OpenOptionsPopup(savedState)
 		if saveAgentProfile then
 			saveAgentProfile()
 		end
+		if self.agentChatOptionsSave then self.agentChatOptionsSave() end
 		if controls.buildPath.buf:match("%S") then
 			self.buildPath = controls.buildPath.buf
 			if not self.buildPath:match("[\\/]$") then
