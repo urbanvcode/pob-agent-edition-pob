@@ -773,6 +773,8 @@ handlers.tree_search = function(params)
 	return { ok = true, nodes = out, total = total }
 end
 
+local passiveOptions -- defined after suggest_passives
+
 -- Passive suggestions -----------------------------------------------------------
 -- params: { max_points = 5, focus = "balanced"|"dps"|"defence", limit = 10 }
 -- Simulates each nearby notable/keystone (with its path) and each mastery effect.
@@ -790,7 +792,6 @@ handlers.suggest_passives = function(params)
 		return s, d, e
 	end
 	local candidates, evaluated = {}, 0
-	local ascendancyUsed = select(2, spec:CountAllocNodes())
 	local function consider(node, pathNodes, points, name, stats, extra)
 		if evaluated >= 250 then return end
 		local okCalc, o = pcall(calc, { addNodes = pathNodes })
@@ -804,6 +805,21 @@ handlers.suggest_passives = function(params)
 			t_insert(candidates, c)
 		end
 	end
+	passiveOptions(maxPoints, consider)
+	table.sort(candidates, function(a, b) if a.value ~= b.value then return a.value > b.value end return a.score > b.score end)
+	local limit = m_min(m_max(tonumber(params.limit) or 10, 1), 30)
+	while #candidates > limit do table.remove(candidates) end
+	local tree = treeSummary()
+	return { ok = true, suggestions = candidates, evaluated = evaluated, focus = focus, maxPoints = maxPoints,
+		pointsFree = tree.pointsAtLevel - tree.pointsUsed, assumptions = assumptions() }
+end
+
+-- Every passive option within maxPoints: nearby notables, keystones, first small
+-- passives and ascendancy nodes (with their path), and each free effect of a
+-- reachable mastery. consider(node, pathNodes, points, name, stats, extra).
+passiveOptions = function(maxPoints, consider)
+	local spec = build.spec
+	local ascendancyUsed = select(2, spec:CountAllocNodes())
 	for id, node in pairs(spec.nodes) do
 		if not node.alloc and node.path and node.pathDist and node.pathDist <= maxPoints and Ops.is_allocatable(node) and node.modKey ~= ''
 			and not (node.ascendancyName and ascendancyUsed + node.pathDist > 8) then
@@ -832,12 +848,6 @@ handlers.suggest_passives = function(params)
 			end
 		end
 	end
-	table.sort(candidates, function(a, b) if a.value ~= b.value then return a.value > b.value end return a.score > b.score end)
-	local limit = m_min(m_max(tonumber(params.limit) or 10, 1), 30)
-	while #candidates > limit do table.remove(candidates) end
-	local tree = treeSummary()
-	return { ok = true, suggestions = candidates, evaluated = evaluated, focus = focus, maxPoints = maxPoints,
-		pointsFree = tree.pointsAtLevel - tree.pointsUsed, assumptions = assumptions() }
 end
 
 -- Anoint: wraps Core's native simulation and adds percentages.
@@ -953,4 +963,10 @@ loadfile(DIR .. 'Advice.lua')(handlers, Ops, {
 -- Character import and progress tracking (Stage 2)
 loadfile(DIR .. 'Character.lua')(handlers, Ops, {
 	keyStats = keyStats, mainSkillName = mainSkillName, assumptions = assumptions, mainOutput = mainOutput,
+})
+
+-- Optimiser: goal-based min-maxing (Stage 4)
+loadfile(DIR .. 'Optimise.lua')(handlers, Ops, {
+	num = num, dpsOf = dpsOf, pctChange = pctChange, strip = strip, recalc = recalc, assumptions = assumptions, mainSkillName = mainSkillName,
+	capture = capture, restore = restore, applyOps = applyOps, passiveOptions = passiveOptions, treeSummary = treeSummary,
 })

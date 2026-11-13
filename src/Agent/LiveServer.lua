@@ -233,8 +233,13 @@ function LiveServer:AddLiveHandlers(handlers)
 		if type(params) ~= "table" or type(params.items) ~= "table" then return { ok = false, error = "items required" } end
 		params.buildName = buildLoaded() and build.buildName or nil
 		params.receivedAt = os.time()
-		main.agentAdvisor = params
-		return { ok = true, count = #params.items }
+		-- Tabs: Items (plan_upgrades), Passives / Gems / Other (optimise).
+		local tab = (params.tab == "Passives" or params.tab == "Gems" or params.tab == "Other") and params.tab or "Items"
+		main.agentAdvisorTabs = main.agentAdvisorTabs or { }
+		main.agentAdvisorTabs[tab] = params
+		if tab == "Items" then main.agentAdvisor = params end
+		if tab == "Items" or params.select then main.agentAdvisorTab = tab end
+		return { ok = true, count = #params.items, tab = tab }
 	end
 
 	handlers.get_capabilities = function()
