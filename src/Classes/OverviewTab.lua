@@ -7,6 +7,7 @@
 local Viz = LoadModule("Agent/Viz")
 local Icons = LoadModule("Agent/IconCache")
 local AgentSettings = LoadModule("Agent/Settings")
+local Progress = LoadModule("Agent/ProgressCard")
 local col = Viz.col
 local m_max, m_min, m_floor, m_pi = math.max, math.min, math.floor, math.pi
 local t_insert = table.insert
@@ -1063,6 +1064,11 @@ function OverviewTabClass:CardHealth(x, y, w, h, o)
 	end
 end
 
+-- Progress (timeline of the synced character, Agent/ProgressCard.lua) ---------
+function OverviewTabClass:CardProgress(x, y, w, h, o)
+	Progress.draw(self, x, y, w, h)
+end
+
 -- Main draw ------------------------------------------------------------------
 function OverviewTabClass:Draw(viewPort, inputEvents)
 	self.x, self.y, self.width, self.height = viewPort.x, viewPort.y, viewPort.width, viewPort.height
@@ -1110,6 +1116,7 @@ function OverviewTabClass:Draw(viewPort, inputEvents)
 	local cardW = (w - gap * (cols - 1)) / cols
 	local cards = {
 		{ fn = self.CardAdvisor, h = self:AdvisorHeight() },
+		{ fn = self.CardProgress, h = 196 },
 		{ fn = self.CardInventory, h = self:InventoryHeight(cardW) },
 		{ fn = self.CardDamageTypes, h = 196 },
 		{ fn = self.CardDamageSources, h = 196 },

@@ -949,3 +949,8 @@ loadfile(DIR .. 'Advice.lua')(handlers, Ops, {
 	num = num, dpsOf = dpsOf, pctChange = pctChange, strip = strip, recalc = recalc, mainOutput = mainOutput,
 	assumptions = assumptions, mainSkillName = mainSkillName, capture = capture, restore = restore,
 })
+
+-- Character import and progress tracking (Stage 2)
+loadfile(DIR .. 'Character.lua')(handlers, Ops, {
+	keyStats = keyStats, mainSkillName = mainSkillName, assumptions = assumptions, mainOutput = mainOutput,
+})
