@@ -231,6 +231,17 @@ function main:Init()
 	end
 	self.controls.forkLabel = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {148, -26, 0, 16}, "")
 	self.controls.forkLabel.label = function()
+		if launch.agentEdition then
+			-- Agent Edition: this slot shows the AI link status
+			local server = launch.agentServer
+			local status = server and server.status or "off"
+			if status == "listening" and #server.clients > 0 then
+				return "^x5CD677AI connected"
+			elseif status == "listening" then
+				return "^8AI link ready"
+			end
+			return "^xF5A742AI link " .. status
+		end
 		return "^8PoB Community Fork"
 	end
 	self.controls.versionLabel = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {148, -2, 0, 16}, "")
@@ -239,14 +250,7 @@ function main:Init()
 	end
 	self.controls.devMode = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {0, -26, 0, 20}, function()
 		if not launch.agentEdition then return colorCodes.NEGATIVE.."Dev Mode" end
-		local server = launch.agentServer
-		local status = server and server.status or "off"
-		if status == "listening" and #server.clients > 0 then
-			return "^x4FD1C2Agent Edition ^7- AI connected"
-		elseif status == "listening" then
-			return "^x4FD1C2Agent Edition ^8- AI link ready"
-		end
-		return "^x4FD1C2Agent Edition ^8- AI link " .. status
+		return "^x4FD1C2Agent Edition"
 	end)
 	self.controls.devMode.shown = function()
 		return launch.devMode

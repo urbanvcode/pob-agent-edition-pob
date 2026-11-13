@@ -82,7 +82,9 @@ local function loadJewelFile(jewelTypeName, cacheUncompressed)
 	end
 
 	local jewelData = Inflate(compressedData)
-	if cacheUncompressed then
+	-- Agent Edition: never cache an empty result (headless runs stub Inflate and
+	-- would otherwise wipe timeless jewel data for the real app too)
+	if cacheUncompressed and jewelData and #jewelData > 0 then
 		local uncompressedFile = io.open(scriptPath .. jewelPath .. ".bin", "wb+")
 		if uncompressedFile then
 			uncompressedFile:write(jewelData)
