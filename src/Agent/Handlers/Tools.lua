@@ -974,5 +974,8 @@ loadfile(DIR .. 'Optimise.lua')(handlers, Ops, {
 -- Economy: own items and what to look for (Stage 5)
 loadfile(DIR .. 'Economy.lua')(handlers, Ops, { strip = strip })
 
+-- Farming advisor: content the build can do, atlas presets (Stage 8)
+loadfile(DIR .. 'Farming.lua')(handlers, Ops, { num = num, dpsOf = dpsOf, recalc = recalc, mainOutput = mainOutput, assumptions = assumptions, mainSkillName = mainSkillName, capture = capture, restore = restore })
+
 -- Crafting helper: mod pools with spawn weights, target items (Stage 6)
 loadfile(DIR .. 'Craft.lua')(handlers, Ops, { strip = strip })
