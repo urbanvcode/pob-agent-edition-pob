@@ -28,7 +28,7 @@ local ELEMENTS = {
 	{ key = "Lightning", label = "Lightning", col = col.lightning },
 	{ key = "Chaos", label = "Chaos", col = col.chaos },
 }
-local TAB_NAMES = { CALCS = "Calcs", SKILLS = "Skills", ITEMS = "Items", TREE = "Tree", CONFIG = "Configuration" }
+local TAB_NAMES = { ATLAS = "Atlas", CALCS = "Calcs", SKILLS = "Skills", ITEMS = "Items", TREE = "Tree", CONFIG = "Configuration" }
 
 local function out(o, k) return tonumber(o and o[k]) or 0 end
 local function fmtInt(v) return formatNumSep(tostring(m_floor((tonumber(v) or 0) + 0.5))) end
@@ -808,6 +808,43 @@ function OverviewTabClass:CardAdvisor(x, y, w, h, o)
 	end
 end
 
+-- Atlas (summary of the build's atlas tree) ----------------------------------------
+function OverviewTabClass:CardAtlas(x, y, w, h, o)
+	local tab = self.build.atlasTab
+	local atlas = tab and tab:Data()
+	local cx, cy, cw, ch = self:Card("cAtlas", x, y, w, h, "Atlas Tree", atlas and ("version " .. atlas.version:gsub("_", ".")) or nil, nil, "ATLAS")
+	if not atlas then
+		Viz.text(cx, cy, "LEFT", 14, "VAR", "Atlas data not available", col.muted)
+		return
+	end
+	local s = LoadModule("Agent/AtlasData").summary(atlas, tab.alloc)
+	Viz.text(cx, cy, "LEFT", 14, "VAR", string.format("%d / %d points", s.used, atlas.points), col.text)
+	Viz.bar(cx + 110, cy + 5, cw - 110, 7, s.used / atlas.points, { 0.86, 0.68, 0.32 })
+	cy = cy + 22
+	if s.used == 0 then
+		Viz.text(cx, cy, "LEFT", 13, "VAR", "No atlas passives yet. Open the Atlas tab,", col.muted)
+		Viz.text(cx, cy + 16, "LEFT", 13, "VAR", "import a guide's link, or ask your AI to plan one.", col.muted)
+		return
+	end
+	local maxPts = s.mechanics[1] and s.mechanics[1].points or 1
+	for i, m in ipairs(s.mechanics) do
+		if i > 4 then break end
+		Viz.text(cx, cy, "LEFT", 13, "VAR", Viz.fit(13, "VAR", m.name, cw * 0.55), col.text)
+		Viz.text(cx + cw, cy, "RIGHT", 13, "VAR BOLD", tostring(m.points), col.muted)
+		Viz.bar(cx, cy + 16, cw, 4, m.points / maxPts, col.accent)
+		self:Hot("atl" .. i, cx, cy, cw, 24, function(tt)
+			tt:AddLine(16, "^7" .. m.name .. ": " .. m.points .. " points")
+			for _, n in ipairs(m.notables) do tt:AddLine(14, "^xD9B45A" .. n.name) end
+		end, "ATLAS")
+		cy = cy + 24
+	end
+	local keystones = { }
+	for _, n in ipairs(s.special) do if n.type == "keystone" then table.insert(keystones, n.name) end end
+	if #keystones > 0 then
+		Viz.text(cx, cy + 2, "LEFT", 13, "VAR", "^xE8C35A" .. Viz.fit(13, "VAR", "Keystones: " .. table.concat(keystones, ", "), cw))
+	end
+end
+
 function OverviewTabClass:CardHealth(x, y, w, h, o)
 	local checks = self:HealthChecks(o)
 	local bad = 0
@@ -890,6 +927,7 @@ function OverviewTabClass:Draw(viewPort, inputEvents)
 		{ fn = self.CardAilments, h = 210 },
 		{ fn = self.CardResources, h = 196 },
 		{ fn = self.CardHealth, h = 196 },
+		{ fn = self.CardAtlas, h = 196 },
 		{ fn = self.CardAttributes, h = 196 },
 	}
 	local colY = { }

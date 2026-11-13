@@ -50,6 +50,12 @@ local AtlasTabClass = newClass("AtlasTab", "ControlHost", "Control", function(se
 	self.controls.fit = new("ButtonControl", { "LEFT", self.controls.export, "RIGHT" }, { 8, 0, 80, 20 }, "Fit view", function()
 		self.zoom = nil
 	end)
+	self.showSummary = true
+	self.controls.summary = new("ButtonControl", { "LEFT", self.controls.fit, "RIGHT" }, { 8, 0, 90, 20 }, "Summary", function()
+		self.showSummary = not self.showSummary
+		self.zoom = nil
+	end)
+	self.controls.summary.locked = function() return self.showSummary end
 end)
 
 function AtlasTabClass:Data()
@@ -248,7 +254,8 @@ function AtlasTabClass:Draw(viewPort, inputEvents)
 
 	-- Fit to view the first time
 	local top = 36
-	local vw, vh = viewPort.width, viewPort.height - top
+	local panelW = self.showSummary and m_floor(m_min(360, m_max(260, viewPort.width * 0.28))) or 0
+	local vw, vh = viewPort.width - panelW, viewPort.height - top
 	if not self.zoom then
 		local tw, th = atlas.maxX - atlas.minX, atlas.maxY - atlas.minY
 		self.zoom = m_min(vw / tw, vh / th) * 0.95
@@ -258,7 +265,22 @@ function AtlasTabClass:Draw(viewPort, inputEvents)
 	-- Input: drag to pan, wheel to zoom, click to (de)allocate
 	local cursorX, cursorY = GetCursorPos()
 	local mx, my = cursorX - viewPort.x, cursorY - viewPort.y
-	local inside = mx >= 0 and my >= top and mx < viewPort.width and my < viewPort.height
+	local inside = mx >= 0 and my >= top and mx < vw and my < viewPort.height
+	local inPanel = panelW > 0 and mx >= vw and mx < viewPort.width and my >= top and my < viewPort.height
+	-- Summary panel input (scroll, click a notable to fly to it)
+	for id, event in ipairs(inputEvents) do
+		if inPanel and event.type == "KeyUp" and (event.key == "WHEELUP" or event.key == "WHEELDOWN") then
+			self.panelScroll = m_max(0, (self.panelScroll or 0) + (event.key == "WHEELUP" and -40 or 40))
+			inputEvents[id] = nil
+		elseif inPanel and event.type == "KeyUp" and event.key == "LEFTBUTTON" and self.panelHover and self.panelHover.node then
+			local node = self.panelHover.node
+			self.cx, self.cy = node.x, node.y
+			self.zoom = m_max(self.zoom or 0.1, 0.25)
+			inputEvents[id] = nil
+		elseif inPanel and event.type == "KeyDown" and event.key == "LEFTBUTTON" then
+			inputEvents[id] = nil
+		end
+	end
 	local function toScreen(tx, ty) return (tx - self.cx) * self.zoom + vw / 2, (ty - self.cy) * self.zoom + vh / 2 + top end
 	local function toTree(sx, sy) return (sx - vw / 2) / self.zoom + self.cx, (sy - top - vh / 2) / self.zoom + self.cy end
 
@@ -401,7 +423,8 @@ function AtlasTabClass:Draw(viewPort, inputEvents)
 	local ptsText = string.format("Atlas passives: %d / %d", used, atlas.points)
 	if pvCount > 0 then ptsText = ptsText .. Viz.hex(PATH) .. string.format("  (+%d)", pvCount) end
 	Viz.text(viewPort.width - 12, 10, "RIGHT", 16, "VAR BOLD", ptsText, used > atlas.points and col.bad or col.text)
-	Viz.text(viewPort.width - 12, viewPort.height - 20, "RIGHT", 13, "VAR", "Atlas " .. atlas.version:gsub("_", ".") .. "  |  drag to move, wheel to zoom, click to allocate / remove", col.muted)
+	Viz.text(vw - 12, viewPort.height - 20, "RIGHT", 13, "VAR", "Atlas " .. atlas.version:gsub("_", ".") .. "  |  drag to move, wheel to zoom, click to allocate / remove", col.muted)
+	if panelW > 0 then self:DrawSummary(atlas, vw, top, panelW, viewPort.height - top, inPanel and mx, inPanel and my) end
 	if self.flash and GetTime() < self.flash.until_ then
 		Viz.text(vw / 2, top + 10, "CENTER", 16, "VAR BOLD", self.flash.text, self.flash.bad and col.bad or col.good)
 	end
@@ -433,9 +456,99 @@ function AtlasTabClass:Draw(viewPort, inputEvents)
 		SetDrawLayer(nil, 100)
 		tt:Draw(viewPort.x + sx - 20, viewPort.y + sy - 20, 40, 40, main.viewPort)
 		SetDrawLayer(nil, 0)
+	elseif inPanel and self.panelHover then
+		local h = self.panelHover
+		local tt = self.tooltip
+		tt:Clear()
+		if h.node then
+			tt:AddLine(17, (h.node.type == "keystone" and "^xE8C35A" or "^xD9B45A") .. h.node.name)
+			for _, s in ipairs(h.node.stats) do tt:AddLine(14, "^x8888FF" .. s) end
+			tt:AddLine(13, "^x4FD1C2Click to show it on the tree")
+		elseif h.mechanic then
+			tt:AddLine(17, "^7" .. h.mechanic.name .. ": " .. h.mechanic.points .. " points")
+			for _, nn in ipairs(h.mechanic.notables) do tt:AddLine(14, "^xD9B45A" .. nn.name) end
+			if #h.mechanic.notables == 0 then tt:AddLine(13, "^8Only small passives so far") end
+		end
+		SetDrawLayer(nil, 100)
+		tt:Draw(viewPort.x + h.x, viewPort.y + h.y, h.w, h.h, main.viewPort)
+		SetDrawLayer(nil, 0)
 	end
 
 	self:DrawControls(viewPort)
+end
+
+-- Right-hand summary: points, mechanics, notables, combined bonuses.
+function AtlasTabClass:DrawSummary(atlas, x, y, w, h, mx, my)
+	local s = AtlasData.summary(atlas, self.alloc)
+	self.panelHover = nil
+	Viz.rect(x, y, w, h, col.panel or { 0.062, 0.07, 0.092 })
+	Viz.rect(x, y, 1, h, col.border)
+	local px, pw = x + 14, w - 28
+	local cy = y + 12 - (self.panelScroll or 0)
+	local function hot(rx, ry, rw, rh, info)
+		if mx and mx >= rx and mx < rx + rw and my >= ry and my < ry + rh then
+			info.x, info.y, info.w, info.h = rx, ry, rw, rh
+			self.panelHover = info
+			return true
+		end
+	end
+
+	Viz.text(px, cy, "LEFT", 18, "VAR BOLD", "Atlas summary", col.text); cy = cy + 26
+	Viz.text(px, cy, "LEFT", 14, "VAR", string.format("%d / %d points", s.used, atlas.points), col.muted)
+	Viz.text(px + pw, cy, "RIGHT", 14, "VAR", string.format("%d left", atlas.points - s.used), s.used > atlas.points and col.bad or col.good)
+	cy = cy + 20
+	Viz.bar(px, cy, pw, 7, s.used / atlas.points, { 0.86, 0.68, 0.32 }); cy = cy + 20
+
+	-- Mechanics
+	Viz.text(px, cy, "LEFT", 15, "VAR BOLD", "Mechanics", col.text); cy = cy + 22
+	if #s.mechanics == 0 then
+		Viz.text(px, cy, "LEFT", 13, "VAR", "Nothing allocated yet. Click nodes on the tree,", col.muted); cy = cy + 16
+		Viz.text(px, cy, "LEFT", 13, "VAR", "import a guide's atlas link, or ask your AI.", col.muted); cy = cy + 22
+	end
+	local maxPts = s.mechanics[1] and s.mechanics[1].points or 1
+	for _, m in ipairs(s.mechanics) do
+		local isHot = hot(px - 4, cy - 2, pw + 8, 30, { mechanic = m })
+		if isHot then Viz.softRect(px - 4, cy - 2, pw + 8, 30, col.cardHi) end
+		Viz.text(px, cy, "LEFT", 13, "VAR", Viz.fit(13, "VAR", m.name, pw - 70), col.text)
+		Viz.text(px + pw, cy, "RIGHT", 13, "VAR BOLD", m.points .. (#m.notables > 0 and string.format("  (%d notable%s)", #m.notables, #m.notables == 1 and "" or "s") or ""), col.muted)
+		Viz.bar(px, cy + 17, pw, 5, m.points / maxPts, col.accent)
+		cy = cy + 32
+	end
+	cy = cy + 6
+
+	-- Notables and keystones
+	if #s.special > 0 then
+		Viz.text(px, cy, "LEFT", 15, "VAR BOLD", "Notables & keystones", col.text); cy = cy + 22
+		for _, n in ipairs(s.special) do
+			local isHot = hot(px - 4, cy - 1, pw + 8, 19, { node = n })
+			if isHot then Viz.softRect(px - 4, cy - 1, pw + 8, 19, col.cardHi) end
+			Viz.text(px, cy, "LEFT", 14, "VAR", (n.type == "keystone" and "^xE8C35A" or "^xD9B45A") .. Viz.fit(14, "VAR", n.name, pw))
+			cy = cy + 19
+		end
+		cy = cy + 8
+	end
+
+	-- Combined bonuses
+	if #s.stats > 0 then
+		Viz.text(px, cy, "LEFT", 15, "VAR BOLD", "Combined bonuses", col.text); cy = cy + 22
+		for _, line in ipairs(s.stats) do
+			-- wrap long lines
+			local words, cur = { }, ""
+			for word in line.text:gmatch("%S+") do
+				local test = cur == "" and word or (cur .. " " .. word)
+				if DrawStringWidth(13, "VAR", test) > pw - 8 then table.insert(words, cur); cur = word else cur = test end
+			end
+			if cur ~= "" then table.insert(words, cur) end
+			for i, wl in ipairs(words) do
+				Viz.text(px + (i > 1 and 8 or 0), cy, "LEFT", 13, "VAR", wl, { 0.62, 0.66, 0.98 })
+				cy = cy + 16
+			end
+			cy = cy + 3
+		end
+	end
+	-- Clamp scrolling to content
+	local contentH = cy + (self.panelScroll or 0) - y + 12
+	self.panelScroll = m_max(0, m_min(self.panelScroll or 0, m_max(0, contentH - h)))
 end
 
 return AtlasTabClass

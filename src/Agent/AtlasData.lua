@@ -8,6 +8,34 @@ local m_sin, m_cos, m_rad, m_pi = math.sin, math.cos, math.rad, math.pi
 
 local AtlasData = { latest = "3_30", cache = { } }
 
+-- Newest TreeData/Atlas/<major>_<minor> folder, so updating is just adding a folder
+-- (tools/update-atlas.ps1 does that).
+do
+	local best
+	local ok, handle = pcall(NewFileSearch, "TreeData/Atlas/*", true)
+	while ok and handle do
+		local name = handle:GetFileName()
+		local a, b = name:match("^(%d+)_(%d+)$")
+		if a then
+			local v = tonumber(a) * 1000 + tonumber(b)
+			if not best or v > best.v then best = { v = v, name = name } end
+		end
+		if not handle:NextFile() then break end
+	end
+	if best then AtlasData.latest = best.name end
+end
+AtlasData.versions = function()
+	local list = { }
+	local ok, handle = pcall(NewFileSearch, "TreeData/Atlas/*", true)
+	while ok and handle do
+		local name = handle:GetFileName()
+		if name:match("^%d+_%d+$") then table.insert(list, name) end
+		if not handle:NextFile() then break end
+	end
+	table.sort(list)
+	return list
+end
+
 local function orbitAngles(n)
 	local a = { }
 	if n == 16 then
@@ -19,6 +47,15 @@ local function orbitAngles(n)
 	end
 	for i, d in ipairs(a) do a[i] = m_rad(d) end
 	return a
+end
+
+-- GGG markup: "[Thread|Threads]" -> "Threads", "[Maps]" -> "Maps"
+local function clean(list)
+	local out = { }
+	for i, line in ipairs(list or { }) do
+		out[i] = line:gsub("%[([^%]|]+)|([^%]]+)%]", "%2"):gsub("%[([^%]]+)%]", "%1")
+	end
+	return out
 end
 
 local function readFile(path)
@@ -46,7 +83,7 @@ function AtlasData.load(version)
 
 	for id, n in pairs(raw.nodes) do
 		local node = {
-			id = id, name = n.name or "", icon = n.icon, stats = n.stats or { }, reminder = n.reminderText or { },
+			id = id, name = n.name or "", icon = n.icon, stats = clean(n.stats), reminder = clean(n.reminderText),
 			group = n.group, orbit = n.orbit or 0, orbitIndex = n.orbitIndex or 0,
 			out = n.out or { }, ["in"] = n["in"] or { }, links = { },
 		}
@@ -100,6 +137,27 @@ function AtlasData.load(version)
 	end
 	atlas.minX, atlas.minY, atlas.maxX, atlas.maxY = raw.min_x, raw.min_y, raw.max_x, raw.max_y
 
+	-- League mechanic per node: the mastery emblem in its group, else the nearest one
+	local masteries = { }
+	for _, node in ipairs(atlas.list) do
+		if node.type == "mastery" and node.x then table.insert(masteries, node) end
+	end
+	local byGroup = { }
+	for _, m in ipairs(masteries) do byGroup[m.group] = m.name end
+	for _, node in ipairs(atlas.list) do
+		if node.type ~= "mastery" and node.type ~= "root" and node.type ~= "start" and node.x then
+			local name = byGroup[node.group]
+			if not name then
+				local best
+				for _, m in ipairs(masteries) do
+					local d = (m.x - node.x) ^ 2 + (m.y - node.y) ^ 2
+					if not best or d < best then best, name = d, m.name end
+				end
+			end
+			node.mechanic = name or "General"
+		end
+	end
+
 	-- Search index
 	for _, node in ipairs(atlas.list) do
 		node.searchText = (node.name .. " " .. table.concat(node.stats, " ")):lower()
@@ -149,6 +207,53 @@ function AtlasData.connected(atlas, alloc, removed)
 		end
 	end
 	return keep
+end
+
+-- Summary of an allocation: points per mechanic, notables/keystones and
+-- combined stats (identical stat lines with numbers summed).
+function AtlasData.summary(atlas, alloc)
+	local mech, mechOrder, special, stats, statOrder = { }, { }, { }, { }, { }
+	local used = 0
+	for id in pairs(alloc) do
+		local n = atlas.nodes[id]
+		if n and n.mechanic then
+			used = used + 1
+			local m = mech[n.mechanic]
+			if not m then m = { name = n.mechanic, points = 0, notables = { } }; mech[n.mechanic] = m; table.insert(mechOrder, m) end
+			m.points = m.points + 1
+			if n.type == "notable" or n.type == "keystone" then
+				table.insert(m.notables, n)
+				table.insert(special, n)
+			end
+			for _, line in ipairs(n.stats) do
+				local nums = { }
+				-- Only the first number is summed ("(Tier 14+)" style numbers stay as written)
+				local template = line:gsub("%d+%.?%d*", function(num) table.insert(nums, tonumber(num) or 0) return "#" end, 1)
+				local s = stats[template]
+				if not s then s = { template = template, sums = { }, count = 0 }; stats[template] = s; table.insert(statOrder, s) end
+				s.count = s.count + 1
+				for i, v in ipairs(nums) do s.sums[i] = (s.sums[i] or 0) + v end
+			end
+		end
+	end
+	table.sort(mechOrder, function(a, b) return a.points > b.points or (a.points == b.points and a.name < b.name) end)
+	table.sort(special, function(a, b)
+		local ka, kb = a.type == "keystone", b.type == "keystone"
+		if ka ~= kb then return ka end
+		return a.name < b.name
+	end)
+	local lines = { }
+	for _, s in ipairs(statOrder) do
+		local i = 0
+		local text = s.template:gsub("#", function()
+			i = i + 1
+			local v = s.sums[i] or 0
+			return (v == math.floor(v)) and tostring(math.floor(v)) or string.format("%.1f", v)
+		end)
+		table.insert(lines, { text = text, count = s.count })
+	end
+	table.sort(lines, function(a, b) return a.text < b.text end)
+	return { used = used, mechanics = mechOrder, special = special, stats = lines }
 end
 
 -- Official atlas tree links:

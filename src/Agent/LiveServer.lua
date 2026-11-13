@@ -188,6 +188,13 @@ function LiveServer:AddLiveHandlers(handlers)
 		return { ok = true, view = view }
 	end
 
+	-- Dev helper: PoB's own full-window screenshot (saved by SimpleGraphic)
+	handlers.take_screenshot = function()
+		if not TakeScreenshot then return { ok = false, error = "not available" } end
+		TakeScreenshot()
+		return { ok = true }
+	end
+
 	-- Upgrade suggestions from the AI, shown in the Overview's Advisor card.
 	handlers.set_advisor = function(params)
 		if type(params) ~= "table" or type(params.items) ~= "table" then return { ok = false, error = "items required" } end
