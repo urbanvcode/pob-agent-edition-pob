@@ -65,7 +65,31 @@ local GuideTabClass = newClass("GuideTab", "ControlHost", "Control", function(se
 		Sync.setAuto(state)
 	end, "While PoB is open and your synced character's build is open (and saved), re-sync it every 15 minutes. Off by default.")
 	self.controls.autoSync.state = Sync.autoEnabled()
+	-- Hide/Show the left panel so the tree can use the whole width (remembered in AgentEdition.json).
+	self.controls.panelToggle = new("ButtonControl", { "LEFT", self.controls.autoSync, "RIGHT" }, { 14, 0, 100, 20 }, function()
+		return self:PanelHidden() and "Show panel" or "Hide panel"
+	end, function()
+		self:SetPanelHidden(not self:PanelHidden())
+	end)
+	self.controls.panelToggle.tooltipText = "Hide the guide panel on the left so the tree uses the whole width; Show brings it (and Analyse results) back. Remembered."
 end)
+
+function GuideTabClass:PanelHidden()
+	if self.panelHidden == nil then
+		local ok, v = pcall(AgentSettings.get, main.userPath, "guideHelpHidden")
+		self.panelHidden = ok and v == true
+	end
+	return self.panelHidden
+end
+
+function GuideTabClass:SetPanelHidden(hidden)
+	self.panelHidden = hidden and true or false
+	pcall(AgentSettings.set, main.userPath, "guideHelpHidden", self.panelHidden)
+end
+
+function GuideTabClass:PanelWidth()
+	return self:PanelHidden() and 0 or PANEL_W
+end
 
 -- Shared state with the AI tools ---------------------------------------------------------
 local function guideDir() return (main.userPath or "") .. "AgentCache/guide/" end
@@ -654,7 +678,8 @@ function GuideTabClass:Draw(viewPort, inputEvents)
 	local mx, my = cursorX - viewPort.x, cursorY - viewPort.y
 	local panelX, panelY = 0, TOOLBAR_H
 	local panelH = viewPort.height - TOOLBAR_H
-	local inPanel = mx >= 0 and mx < PANEL_W and my >= panelY and my < viewPort.height
+	local panelW = self:PanelWidth()
+	local inPanel = panelW > 0 and mx >= 0 and mx < panelW and my >= panelY and my < viewPort.height
 	local overRegion = inPanel and regionAt(self.lastHot, mx, my) or nil
 	self.hoverId = overRegion and overRegion.id or nil
 	for id, event in ipairs(inputEvents) do
@@ -678,12 +703,12 @@ function GuideTabClass:Draw(viewPort, inputEvents)
 	Viz.rect(0, TOOLBAR_H - 1, viewPort.width, 1, col.border)
 	local status = Sync.status or ""
 	local statusCol = Sync.ok == false and col.bad or (Sync.busy and col.warn or col.muted)
-	Viz.text(330, 34, "LEFT", 13, "VAR", Viz.fit(13, "VAR", status, viewPort.width - 340), statusCol)
+	Viz.text(450, 34, "LEFT", 13, "VAR", Viz.fit(13, "VAR", status, viewPort.width - 460), statusCol)
 	SetViewport()
 
 	-- Tree on the right, with the guide's stage drawn over it
-	local treeX = viewPort.x + PANEL_W
-	local treeVPabs = { x = treeX, y = viewPort.y + TOOLBAR_H, width = viewPort.width - PANEL_W, height = viewPort.height - TOOLBAR_H }
+	local treeX = viewPort.x + panelW
+	local treeVPabs = { x = treeX, y = viewPort.y + TOOLBAR_H, width = viewPort.width - panelW, height = viewPort.height - TOOLBAR_H }
 	local viewer = self.build.treeTab.viewer
 	local inTree = cursorX >= treeVPabs.x and cursorY >= treeVPabs.y and cursorX < treeVPabs.x + treeVPabs.width and cursorY < treeVPabs.y + treeVPabs.height
 	local entry = self:Entry(self:Guide())
@@ -710,8 +735,13 @@ function GuideTabClass:Draw(viewPort, inputEvents)
 	SetViewport()
 	if not ok then self.message = "Tree: " .. tostring(err) end
 
-	-- Panel on the left
+	-- Panel on the left (hidden: the tree has the whole width)
 	self.hot = { }
+	if panelW == 0 then
+		self.lastHot = self.hot
+		self:DrawControls(viewPort)
+		return
+	end
 	SetViewport(viewPort.x, viewPort.y + panelY, PANEL_W, panelH)
 	Viz.rect(0, 0, PANEL_W, panelH, col.bg)
 	Viz.rect(PANEL_W - 1, 0, 1, panelH, col.border)
