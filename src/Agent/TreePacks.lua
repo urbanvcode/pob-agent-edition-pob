@@ -111,26 +111,40 @@ end)
 local function cleanup()
 	for _, f in ipairs(files) do os.remove(dir .. ver .. "/" .. f.path .. ".part") end
 end
-for i, f in ipairs(files) do
-	if f.path:find("%.%.") or f.path:find("^[/\\]") then cleanup() return nil, "bad file name in packs.json" end
-	local chunks = { }
-	local easy = curl.easy()
-	easy:setopt_url(source .. ver .. "/" .. f.path)
+-- One connection for the whole pack (keep-alive), a fresh one for the single retry of a failed file
+local easy
+local function handle(fresh)
+	if easy and not fresh then return easy end
+	if easy then easy:close() end
+	easy = curl.easy()
 	easy:setopt(curl.OPT_USERAGENT, userAgent)
 	easy:setopt(curl.OPT_FOLLOWLOCATION, 1)
-	easy:setopt(curl.OPT_CONNECTTIMEOUT, 15)
-	easy:setopt(curl.OPT_LOW_SPEED_LIMIT, 1024)
-	easy:setopt(curl.OPT_LOW_SPEED_TIME, 30)
+	easy:setopt(curl.OPT_CONNECTTIMEOUT, 20)
+	easy:setopt(curl.OPT_LOW_SPEED_LIMIT, 512)
+	easy:setopt(curl.OPT_LOW_SPEED_TIME, 60)
 	if proxy and proxy ~= "" then easy:setopt(curl.OPT_PROXY, proxy) end
-	easy:setopt_writefunction(function(data) chunks[#chunks + 1] = data return true end)
-	local _, err = easy:perform()
-	local code = easy:getinfo(curl.INFO_RESPONSE_CODE)
-	easy:close()
-	if err or code ~= 200 then
+	return easy
+end
+local function fetch(url, fresh)
+	local chunks = { }
+	local e = handle(fresh)
+	e:setopt_url(url)
+	e:setopt_writefunction(function(data) chunks[#chunks + 1] = data return true end)
+	local _, err = e:perform()
+	local code = e:getinfo(curl.INFO_RESPONSE_CODE)
+	if err or code ~= 200 then return nil, err and tostring(err:msg()) or ("HTTP " .. tostring(code)) end
+	return table.concat(chunks)
+end
+for i, f in ipairs(files) do
+	if f.path:find("%.%.") or f.path:find("^[/\\]") then cleanup() return nil, "bad file name in packs.json" end
+	local url = source .. ver .. "/" .. f.path
+	local body, err = fetch(url)
+	if not body and not tostring(err):find("^HTTP 4") then body, err = fetch(url, true) end
+	if not body then
+		if easy then easy:close() end
 		cleanup()
-		return nil, err and tostring(err:msg()) or ("HTTP " .. tostring(code))
+		return nil, err
 	end
-	local body = table.concat(chunks)
 	if #body ~= f.size or sha2.sha256(body) ~= f.sha256 then
 		cleanup()
 		return nil, f.path .. " did not match packs.json (size or SHA256)"
@@ -141,6 +155,7 @@ for i, f in ipairs(files) do
 	out:close()
 	if progressFn then progressFn(ver, i, #files) end
 end
+if easy then easy:close() end
 for _, f in ipairs(files) do
 	local final = dir .. ver .. "/" .. f.path
 	os.remove(final)
