@@ -729,6 +729,85 @@ function OverviewTabClass:CardAttributes(x, y, w, h, o)
 	end
 end
 
+-- Advisor (upgrade suggestions pushed by the AI via plan_upgrades) ----------------
+local ADVISOR_ROW = 40
+
+function OverviewTabClass:AdvisorHeight()
+	local adv = main.agentAdvisor
+	if not adv or not adv.items or #adv.items == 0 then return 118 end
+	return 64 + m_min(#adv.items, 8) * ADVISOR_ROW
+end
+
+local function signed(v, dec)
+	return string.format("%+." .. (dec or 1) .. "f", v or 0)
+end
+
+function OverviewTabClass:CardAdvisor(x, y, w, h, o)
+	local adv = main.agentAdvisor
+	local note
+	if adv then
+		note = string.format("%s  |  <= %dc  |  %s", adv.league or "?", m_floor((adv.budget or 0) + 0.5), adv.focus or "balanced")
+		if adv.buildName and adv.buildName ~= self.build.buildName then note = "for " .. adv.buildName end
+	end
+	local cx, cy, cw, ch = self:Card("cAdv", x, y, w, h, "AI Advisor - cheap upgrades", note, nil, nil)
+	if not adv or not adv.items or #adv.items == 0 then
+		Viz.text(cx, cy + 2, "LEFT", 15, "VAR", "Ask your AI for upgrades, for example:", col.muted)
+		Viz.text(cx, cy + 24, "LEFT", 15, "VAR", Viz.fit(15, "VAR", "\"Find cheap instant-buyout upgrades for this build, 30c each\"", cw), col.text)
+		Viz.text(cx, cy + 48, "LEFT", 13, "VAR", Viz.fit(13, "VAR", "Results show up here: hover to compare, click to open the trade listing.", cw), col.muted)
+		return
+	end
+	local itemsTab = self.build.itemsTab
+	for i, it in ipairs(adv.items) do
+		if i > 8 then break end
+		local ry = cy + (i - 1) * ADVISOR_ROW
+		local id = "adv" .. i
+		local hot = self:IsHot(id)
+		Viz.softRect(cx - 4, ry, cw + 8, ADVISOR_ROW - 4, hot and col.cardHi or col.bg, hot and 1 or 0.6)
+		-- rank + slot
+		Viz.text(cx + 2, ry + 3, "LEFT", 14, "VAR BOLD", tostring(i), col.accent)
+		Viz.text(cx + 22, ry + 3, "LEFT", 12, "VAR", (it.slot or ""):upper(), col.muted)
+		-- name
+		local nameCol = (it.rarity and colorCodes[it.rarity]) or "^7"
+		local priceStr = string.format("%s", it.priceText or "")
+		local priceW = DrawStringWidth(14, "VAR BOLD", priceStr) + 6
+		Viz.text(cx + 22, ry + 18, "LEFT", 14, "VAR", nameCol .. Viz.fit(14, "VAR", it.name or "?", cw * 0.55))
+		Viz.text(cx + cw, ry + 3, "RIGHT", 14, "VAR BOLD", priceStr, col.warn)
+		-- effect chips
+		local chips = { }
+		if math.abs(it.dpsPct or 0) >= 0.05 then t_insert(chips, { "DPS " .. signed(it.dpsPct) .. "%", (it.dpsPct or 0) >= 0 and col.accent or col.bad }) end
+		if math.abs(it.ehpPct or 0) >= 0.05 then t_insert(chips, { "EHP " .. signed(it.ehpPct) .. "%", (it.ehpPct or 0) >= 0 and col.good or col.bad }) end
+		if math.abs(it.lifeDelta or 0) >= 1 then t_insert(chips, { "Life " .. signed(it.lifeDelta, 0), (it.lifeDelta or 0) >= 0 and col.life or col.bad }) end
+		if it.resNotes and #it.resNotes > 0 then t_insert(chips, { "res fix", col.cold }) end
+		if it.warnings and #it.warnings > 0 then t_insert(chips, { "!", col.bad }) end
+		local chipX = cx + cw
+		for k = #chips, 1, -1 do
+			local label, c = chips[k][1], chips[k][2]
+			local cwid = DrawStringWidth(12, "VAR BOLD", label) + 10
+			chipX = chipX - cwid
+			if chipX < cx + cw * 0.5 then break end
+			Viz.softRect(chipX, ry + 19, cwid, 15, Viz.mix(col.card, c, 0.25))
+			Viz.text(chipX + 5, ry + 20, "LEFT", 12, "VAR BOLD", label, c)
+			chipX = chipX - 4
+		end
+		self:Hot(id, cx - 4, ry, cw + 8, ADVISOR_ROW - 4, function(tt)
+			local okItem, item = pcall(new, "Item", it.itemText or "")
+			if okItem and item and item.base and itemsTab then
+				itemsTab:AddItemTooltip(tt, item, nil, true)
+				tt:AddSeparator(10)
+			else
+				tt:AddLine(16, "^7" .. (it.name or "?"))
+			end
+			tt:AddLine(15, string.format("^7In your build (%s): ^x4FD1C2DPS %s%%  ^x5CD677EHP %s%%  ^xE04854Life %s", it.slot or "?", signed(it.dpsPct), signed(it.ehpPct), signed(it.lifeDelta, 0)))
+			for _, n in ipairs(it.resNotes or { }) do tt:AddLine(14, "^x6C8FD9" .. n) end
+			for _, wn in ipairs(it.warnings or { }) do tt:AddLine(14, "^xF55454Warning: " .. wn) end
+			tt:AddLine(14, string.format("^7Price: ^xF5A742%s ^8(~%dc)%s", it.priceText or "?", m_floor((it.priceChaos or 0) + 0.5), it.seller and ("  seller " .. it.seller) or ""))
+			tt:AddLine(13, "^x4FD1C2Click to open this listing on pathofexile.com (buy it with instant buyout)")
+		end, function()
+			if it.url and it.url:match("^https://www%.pathofexile%.com/trade/") then OpenURL(it.url) end
+		end)
+	end
+end
+
 function OverviewTabClass:CardHealth(x, y, w, h, o)
 	local checks = self:HealthChecks(o)
 	local bad = 0
@@ -799,6 +878,7 @@ function OverviewTabClass:Draw(viewPort, inputEvents)
 	local gap = 14
 	local cardW = (w - gap * (cols - 1)) / cols
 	local cards = {
+		{ fn = self.CardAdvisor, h = self:AdvisorHeight() },
 		{ fn = self.CardInventory, h = self:InventoryHeight(cardW) },
 		{ fn = self.CardDamageTypes, h = 196 },
 		{ fn = self.CardDamageSources, h = 196 },

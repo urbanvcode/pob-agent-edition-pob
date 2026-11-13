@@ -188,6 +188,15 @@ function LiveServer:AddLiveHandlers(handlers)
 		return { ok = true, view = view }
 	end
 
+	-- Upgrade suggestions from the AI, shown in the Overview's Advisor card.
+	handlers.set_advisor = function(params)
+		if type(params) ~= "table" or type(params.items) ~= "table" then return { ok = false, error = "items required" } end
+		params.buildName = buildLoaded() and build.buildName or nil
+		params.receivedAt = os.time()
+		main.agentAdvisor = params
+		return { ok = true, count = #params.items }
+	end
+
 	handlers.get_capabilities = function()
 		local actions = {}
 		for name in pairs(handlers) do table.insert(actions, name) end
