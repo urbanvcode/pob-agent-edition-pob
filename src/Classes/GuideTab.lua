@@ -80,6 +80,8 @@ local function readJson(path)
 end
 
 local function writeJson(path, value)
+	-- MakeDir does not create parents: a fresh install has no AgentCache yet.
+	MakeDir((main.userPath or "") .. "AgentCache/")
 	MakeDir(guideDir())
 	local f = io.open(path .. ".tmp", "w")
 	if not f then return end
@@ -111,6 +113,14 @@ end
 local function handlers()
 	local server = launch.agentServer
 	return server and server.handlers
+end
+
+-- The agent handlers work on the global `build`, which the AI link only sets while it
+-- answers a request: every call from this tab runs with this tab's build set.
+function GuideTabClass:Call(name, params)
+	local h = handlers()
+	if not h or not h[name] or not h._withBuild then return nil end
+	return h._withBuild(self.build, h[name], params)
 end
 
 -- Guides on disk ---------------------------------------------------------------------------
@@ -181,8 +191,8 @@ function GuideTabClass:RefreshStages()
 	local h = handlers()
 	self.detected = nil
 	if h and #self.stages > 0 then
-		local me = h.guide_stages({ })
-		local det = me.ok and h.guide_detect({ stages = self.stages, me = me.stages[1], level = me.level, pointsAtLevel = me.pointsAtLevel })
+		local me = self:Call("guide_stages", { })
+		local det = me and me.ok and self:Call("guide_detect", { stages = self.stages, me = me.stages[1], level = me.level, pointsAtLevel = me.pointsAtLevel })
 		if det and det.ok then self.detected = det end
 	end
 	local detTitle = "?"
@@ -240,7 +250,7 @@ function GuideTabClass:Analyse()
 	if not data or not data.ok then self.message = "Could not read the guide stage: " .. tostring(data and data.error) return end
 	local profile = AgentSettings.getProfile(main.userPath) or { }
 	local choice = self:Choice()
-	local res = h.guide_gap({ guide = data, skip = choice.accept or { }, levelling = stage.levelling == true, hardcore = profile.hardcore == true,
+	local res = self:Call("guide_gap", { guide = data, skip = choice.accept or { }, levelling = stage.levelling == true, hardcore = profile.hardcore == true,
 		league = profile.league ~= "" and profile.league or nil, playMode = profile.playMode })
 	if not res or not res.ok then self.message = "Analysis failed: " .. tostring(res and res.error) return end
 	self.result, self.guideData, self.stage, self.stageReason = res, data, stage, reason

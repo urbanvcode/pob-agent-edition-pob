@@ -209,6 +209,8 @@ end
 
 local function record(last, char, state, xml)
 	local dir = historyDir()
+	MakeDir((main and main.userPath or "") .. "AgentCache/")
+	MakeDir(dir)
 	local base = safe(last.realm or "pc") .. "_" .. safe(last.account) .. "_" .. safe(char.name)
 	local file = dir .. base .. ".json"
 	local history = readJson(file) or { version = 1, account = last.account, realm = last.realm or "pc", character = char.name, characterHash = common.sha1(char.name), entries = {} }
@@ -272,7 +274,7 @@ function Sync.start(build, auto)
 		return
 	end
 	local h = handlers()
-	if not h or not h.character_import then Sync.status, Sync.ok = "The agent link is not running in this window (Options shows why).", false return end
+	if not h or not h.character_import or not h._withBuild then Sync.status, Sync.ok = "The agent link is not running in this window (Options shows why).", false return end
 	Sync.busy, Sync.ok = true, nil
 	Sync.lastAt = os.time()
 	Sync.status = (auto and "Auto-sync: " or "") .. "downloading " .. last.character .. " (3 requests, 2 s apart)..."
@@ -299,11 +301,12 @@ function Sync.start(build, auto)
 				if err3 then return bad(err3, "passive tree") end
 				local okPass, passives = pcall(dkjson.decode, passBody or "")
 				if not okPass or type(passives) ~= "table" then return fail("pathofexile.com sent an unreadable passive tree.") end
-				local res = h.character_import({ character = char, items = items, passives = passives, realm = realm,
+				-- The handlers work on the global `build`; outside an AI request it is not set.
+				local res = h._withBuild(build, h.character_import, { character = char, items = items, passives = passives, realm = realm,
 					name = build.buildName, accountHash = common.sha1(last.account) })
 				if not res or not res.ok then return fail(res and res.error or "PoB could not import the character.") end
 				if build.dbFileName then pcall(build.SaveDBFile, build) end
-				local xml = h.export_build_xml and h.export_build_xml({})
+				local xml = h.export_build_xml and h._withBuild(build, h.export_build_xml, {})
 				local okRec, text = pcall(record, last, char, res.state, xml and xml.xml)
 				Sync.busy = false
 				Sync.ok = okRec
