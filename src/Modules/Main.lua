@@ -973,7 +973,7 @@ function main:OpenOptionsPopup(savedState)
 	controls.buildPath.tooltipText = "Overrides the default save location for builds.\nThe default location is: '"..self.defaultBuildPath.."'"
 
 	if launch.agentEdition then
-		-- Agent Edition: trade session id shared with AI tools (stored in AgentEdition.json, read by pob-mcp)
+		-- Agent Edition: trade session id shared with AI tools (stored in AgentEdition.json, read by agent-mcp)
 		nextRow()
 		local agentSettings = LoadModule("Agent/Settings")
 		controls.tradeSessionId = new("EditControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 290, 18 }, agentSettings.get(self.userPath, "POESESSID") or "", nil, "%W", 64)
@@ -1178,7 +1178,7 @@ function main:OpenOptionsPopup(savedState)
 
 	local saveAgentProfile
 	if launch.agentEdition then
-		-- Agent Edition: player profile shared with every AI client (AgentEdition.json, pob-mcp profile_get/profile_set)
+		-- Agent Edition: player profile shared with every AI client (AgentEdition.json, agent-mcp profile_get/profile_set)
 		nextRow()
 		local agentSettings = LoadModule("Agent/Settings")
 		local profile = agentSettings.getProfile(self.userPath)

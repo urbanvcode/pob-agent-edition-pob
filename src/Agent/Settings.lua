@@ -1,8 +1,8 @@
 -- Agent Edition settings, kept in <user folder>/AgentEdition.json so the
 -- regular PoB (which shares Settings.xml) never drops them.
--- pob-mcp reads the same file (POESESSID for trade searches, the player
+-- agent-mcp reads the same file (POESESSID for trade searches, the player
 -- profile for every AI client). Keep the profile schema in sync with
--- pob-mcp/src/utils/playerProfile.ts.
+-- agent-mcp/src/profile.ts.
 
 local json = require("dkjson")
 

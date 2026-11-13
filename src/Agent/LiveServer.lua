@@ -1,12 +1,10 @@
 -- Agent Edition live server.
 --
--- Lets AI tools (via pob-mcp) drive the PoB window you are looking at.
--- Speaks the same JSON-lines protocol as pob-mcp's headless stdio bridge and
--- reuses its handlers (pob-mcp/lua/bridge_handlers.lua), so every lua_* MCP
--- tool works against the live GUI build.
+-- Lets AI tools (via agent-mcp) drive the PoB window you are looking at.
+-- Speaks JSON lines (one request, one reply) and shares its handlers
+-- (Agent/Handlers/) with the headless runner (Agent/Headless.lua).
 --
 -- Binds to 127.0.0.1 only. Port: POB_AGENT_PORT (default 31337).
--- Handler dir: POB_AGENT_LUA_DIR (default <repo>/../pob-mcp/lua/).
 -- Disable with POB_AGENT_DISABLE=1.
 
 local socket = require("socket")
@@ -50,13 +48,8 @@ local function encode(value)
 end
 
 local function handlerDir()
-	local dir = os.getenv("POB_AGENT_LUA_DIR")
-	if not dir or dir == "" then
-		-- GetScriptPath() is <repo>/src; pob-mcp sits next to the repo.
-		dir = GetScriptPath() .. "/../../pob-mcp/lua/"
-	end
-	dir = dir:gsub("\\", "/")
-	if not dir:match("/$") then dir = dir .. "/" end
+	-- GetScriptPath() is <repo>/src
+	local dir = (GetScriptPath() .. "/Agent/Handlers/"):gsub("\\", "/")
 	return dir
 end
 
@@ -78,7 +71,7 @@ end
 
 function LiveServer:LoadHandlers()
 	local dir = handlerDir()
-	local chunk, err = loadfile(dir .. "bridge_handlers.lua")
+	local chunk, err = loadfile(dir .. "Core.lua")
 	if not chunk then
 		return nil, "cannot load handlers from " .. dir .. ": " .. tostring(err)
 	end
@@ -128,6 +121,21 @@ function LiveServer:AddLiveHandlers(handlers)
 				return { ok = false, error = "PoB did not open the build; check the XML and supported build version" }
 			end
 			return { ok = true, build_id = 1 }
+		end)
+	end
+
+	-- Put a snapshot back into the window: same file and name, marked unsaved.
+	handlers.restore_build_xml = function(params)
+		if type(params.xml) ~= "string" then return { ok = false, error = "missing xml" } end
+		if not buildLoaded() then return { ok = false, error = "no build open in PoB" } end
+		local file, name, view = build.dbFileName, build.buildName, build.viewMode
+		main:SetMode("BUILD", file or false, name, params.xml)
+		return defer(function()
+			setBuildGlobal()
+			if not buildLoaded() then return { ok = false, error = "PoB could not load the snapshot" } end
+			build.viewMode = view
+			build.modFlag = true
+			return { ok = true, file = build.dbFileName, name = build.buildName }
 		end)
 	end
 
