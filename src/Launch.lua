@@ -240,6 +240,9 @@ function launch:OnSubError(id, errMsg)
 		if errMsg then
 			self:ShowErrMsg("In download callback: %s", errMsg)
 		end
+	elseif self.subScripts[id].type == "CUSTOM" and self.subScripts[id].callback then
+		-- Agent Edition: let custom sub-scripts learn that they failed
+		PCall(self.subScripts[id].callback, false, errMsg)
 	end
 	self.subScripts[id] = nil
 end

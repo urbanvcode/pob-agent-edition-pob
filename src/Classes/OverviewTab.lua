@@ -5,6 +5,7 @@
 -- details on hover and most open the related tab on click.
 --
 local Viz = LoadModule("Agent/Viz")
+local Icons = LoadModule("Agent/IconCache")
 local col = Viz.col
 local m_max, m_min, m_floor, m_pi = math.max, math.min, math.floor, math.pi
 local t_insert = table.insert
@@ -467,38 +468,161 @@ function OverviewTabClass:CardSkills(x, y, w, h, o)
 	if #groups == 0 then Viz.text(cx, cy, "LEFT", 14, "VAR", "No skills yet", col.muted) end
 end
 
-local GEAR_SLOTS = { "Weapon 1", "Weapon 2", "Helmet", "Body Armour", "Gloves", "Boots", "Amulet", "Ring 1", "Ring 2", "Belt" }
-function OverviewTabClass:CardGear(x, y, w, h, o)
+-- Inventory (paper doll) ------------------------------------------------------
+-- Same arrangement and slot proportions as the in-game inventory, in grid
+-- units (one unit = one inventory cell).
+local INV_LAYOUT = {
+	{ slot = "Weapon 1",    x = 0,    y = 0.6,  w = 2, h = 4, ph = "icon_weapon.png",      swap = "Weapon 1 Swap", phSwap = "icon_weapon_swap.png" },
+	{ slot = "Helmet",      x = 3.6,  y = 0.6,  w = 2, h = 2, ph = "icon_helmet.png" },
+	{ slot = "Weapon 2",    x = 7.2,  y = 0.6,  w = 2, h = 4, ph = "icon_weapon_2.png",    swap = "Weapon 2 Swap", phSwap = "icon_weapon_2_swap.png" },
+	{ slot = "Body Armour", x = 3.6,  y = 2.75, w = 2, h = 3, ph = "icon_body_armour.png" },
+	{ slot = "Amulet",      x = 5.85, y = 2.75, w = 1, h = 1, ph = "icon_amulet.png" },
+	{ slot = "Ring 1",      x = 2.35, y = 3.85, w = 1, h = 1, ph = "icon_ring_left.png" },
+	{ slot = "Ring 2",      x = 5.85, y = 3.85, w = 1, h = 1, ph = "icon_ring_right.png" },
+	{ slot = "Gloves",      x = 1.35, y = 5.0,  w = 2, h = 2, ph = "icon_gloves.png" },
+	{ slot = "Belt",        x = 3.6,  y = 5.9,  w = 2, h = 1, ph = "icon_belt.png" },
+	{ slot = "Boots",       x = 5.85, y = 5.0,  w = 2, h = 2, ph = "icon_boots.png" },
+	{ slot = "Flask 1",     x = 2.1,  y = 7.25, w = 1, h = 2, flask = true },
+	{ slot = "Flask 2",     x = 3.1,  y = 7.25, w = 1, h = 2, flask = true },
+	{ slot = "Flask 3",     x = 4.1,  y = 7.25, w = 1, h = 2, flask = true },
+	{ slot = "Flask 4",     x = 5.1,  y = 7.25, w = 1, h = 2, flask = true },
+	{ slot = "Flask 5",     x = 6.1,  y = 7.25, w = 1, h = 2, flask = true },
+}
+local INV_W, INV_H = 9.2, 9.35
+
+local RARITY_COL = {
+	UNIQUE = { 0.75, 0.42, 0.16 }, RELIC = { 0.33, 0.78, 0.36 }, RARE = { 0.86, 0.80, 0.36 },
+	MAGIC = { 0.46, 0.52, 0.96 }, NORMAL = { 0.62, 0.62, 0.62 },
+}
+local SLOT_BG = { 0.035, 0.045, 0.115 }
+
+local placeholders = { }
+local function placeholder(file)
+	if not file then return nil end
+	if not placeholders[file] then
+		local h = NewImageHandle()
+		h:Load("Assets/" .. file)
+		placeholders[file] = h
+	end
+	return placeholders[file]
+end
+
+local function drawFitted(handle, x, y, w, h, alpha)
+	if not handle or not handle:IsValid() then return false end
+	local iw, ih = handle:ImageSize()
+	if not iw or iw <= 0 or not ih or ih <= 0 then return false end
+	local scale = m_min(w / iw, h / ih, 1.6)
+	local dw, dh = iw * scale, ih * scale
+	SetDrawColor(1, 1, 1, alpha or 1)
+	DrawImage(handle, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh)
+	return true
+end
+
+-- Simple flask silhouette, used when no picture exists for a flask base.
+local function drawFlask(x, y, w, h, c, alpha)
+	local cx = x + w / 2
+	local neckW, bodyW = w * 0.26, w * 0.62
+	local a = alpha or 1
+	Viz.rect(cx - neckW / 2 - 2, y + h * 0.12, neckW + 4, h * 0.06, col.physical, a)
+	Viz.rect(cx - neckW / 2, y + h * 0.18, neckW, h * 0.2, Viz.mix(c, col.text, 0.35), a * 0.8)
+	Viz.arc(cx, y + h * 0.62, 0, bodyW / 2, 0, m_pi * 2, Viz.mix(c, col.text, 0.35), a * 0.8)
+	Viz.arc(cx, y + h * 0.62, 0, bodyW / 2 - 2, m_pi * 0.55, m_pi * 1.45, c, a)
+end
+
+local function flaskColour(item)
+	local n = (item.baseName or "") .. " " .. (item.title or "")
+	if n:match("Hybrid") then return col.chaos end
+	if n:match("Life") then return col.life end
+	if n:match("Mana") then return col.mana end
+	return col.dex
+end
+
+function OverviewTabClass:InventoryHeight(w)
+	local u = m_max(26, m_min(54, (w - 24) / INV_W))
+	return m_floor(u * INV_H) + 64
+end
+
+function OverviewTabClass:CardInventory(x, y, w, h, o)
 	local itemsTab = self.build.itemsTab
-	local cx, cy, cw, ch = self:Card("cGear", x, y, w, h, "Gear", "hover for item, click for Items", nil, "ITEMS")
-	local cols = cw >= 420 and 2 or 1
-	local colW = (cw - (cols - 1) * 12) / cols
-	local perCol = math.ceil(#GEAR_SLOTS / cols)
-	local rowH = m_min(26, ch / perCol)
-	for i, slotName in ipairs(GEAR_SLOTS) do
-		local c = m_floor((i - 1) / perCol)
-		local r = (i - 1) % perCol
-		local gx, gy = cx + c * (colW + 12), cy + r * rowH
+	local status = Icons:Status()
+	local note = status == "loading" and "fetching icons..." or (status == "failed" and "icons unavailable" or "hover for item, click for Items")
+	local cx, cy, cw, ch = self:Card("cInv", x, y, w, h, "Inventory", note, nil, nil)
+	local u = m_max(26, m_min(54, cw / INV_W))
+	local ox = cx + (cw - u * INV_W) / 2
+	local oy = cy
+	local set = itemsTab and itemsTab.activeItemSet
+	local calcSet = (set and set.useSecondWeaponSet) and 2 or 1
+	self.invSet = self.invSet or calcSet
+
+	for _, s in ipairs(INV_LAYOUT) do
+		local sx, sy, sw, sh = ox + s.x * u, oy + s.y * u, s.w * u - 4, s.h * u - 4
+		local slotName = (s.swap and self.invSet == 2) and s.swap or s.slot
 		local slot = itemsTab and itemsTab.slots[slotName]
-		local item = slot and slot.selItemId and slot.selItemId > 0 and itemsTab.items[slot.selItemId]
-		local hot = self:IsHot("gear" .. i)
-		if hot then Viz.softRect(gx - 4, gy - 1, colW + 8, rowH - 2, col.track, 0.6) end
-		Viz.text(gx, gy + 3, "LEFT", 12, "VAR", slotName:upper(), col.muted)
-		local nameX = gx + 82
-		if item then
-			local name = item.title or item.name or item.baseName or "?"
-			Viz.text(nameX, gy + 1, "LEFT", 14, "VAR", (colorCodes[item.rarity] or "^7") .. Viz.fit(14, "VAR", name, colW - 84))
-		else
-			Viz.text(nameX, gy + 1, "LEFT", 14, "VAR", "empty", col.bad)
+		local item = slot and slot.selItemId and slot.selItemId > 0 and itemsTab.items[slot.selItemId] or nil
+		local id = "inv" .. s.slot
+		local hot = self:IsHot(id)
+		local inactiveFlask = s.flask and item and slot and slot.active == false
+
+		-- Weapon set tabs above both weapon slots
+		if s.swap then
+			for n = 1, 2 do
+				local tw = 22
+				local tx, ty = sx + (n - 1) * (tw + 3), oy
+				local tabId = "invTab" .. s.slot .. n
+				local on = self.invSet == n
+				Viz.softRect(tx, ty, tw, 16, on and col.cardHi or SLOT_BG)
+				Viz.outline(tx, ty, tw, 16, on and col.warn or (self:IsHot(tabId) and col.text or col.border))
+				Viz.text(tx + tw / 2, ty + 1, "CENTER", 13, "VAR BOLD", n == 1 and "I" or "II", on and col.warn or col.muted)
+				self:Hot(tabId, tx, ty, tw, 16, {
+					"^7Show weapon set " .. (n == 1 and "I" or "II"),
+					"^8Calculations use set " .. (calcSet == 1 and "I" or "II") .. " (change it on the Items tab)",
+				}, function() self.invSet = n end)
+			end
 		end
-		self:Hot("gear" .. i, gx - 4, gy - 1, colW + 8, rowH - 2, function(tt)
+
+		Viz.softRect(sx, sy, sw, sh, hot and Viz.mix(SLOT_BG, col.cardHi, 0.6) or SLOT_BG)
+		local border = item and (RARITY_COL[item.rarity] or col.border) or col.border
+		Viz.outline(sx, sy, sw, sh, hot and col.text or border, item and 0.9 or 0.6)
+		if item then Viz.outline(sx + 1, sy + 1, sw - 2, sh - 2, border, 0.35) end
+
+		local pad = 4
+		if item then
+			local drawn = drawFitted(Icons:Get(item), sx + pad, sy + pad, sw - pad * 2, sh - pad * 2, inactiveFlask and 0.35 or 1)
+			if not drawn then
+				if s.flask then
+					drawFlask(sx, sy, sw, sh, flaskColour(item), inactiveFlask and 0.35 or 1)
+				else
+					drawFitted(placeholder(s.ph), sx + pad, sy + pad, sw - pad * 2, sh - pad * 2, 0.5)
+					local name = item.title or item.baseName or ""
+					Viz.text(sx + sw / 2, sy + sh - 16, "CENTER", 11, "VAR", Viz.fit(11, "VAR", name, sw - 6), border)
+				end
+			end
+		else
+			if s.flask then
+				drawFlask(sx, sy, sw, sh, col.track, 0.6)
+			else
+				drawFitted(placeholder((s.swap and self.invSet == 2) and s.phSwap or s.ph), sx + pad, sy + pad, sw - pad * 2, sh - pad * 2, 0.22)
+			end
+		end
+		if inactiveFlask then
+			Viz.text(sx + sw / 2, sy + sh - 15, "CENTER", 11, "VAR", "off", col.muted)
+		end
+
+		self:Hot(id, sx, sy, sw, sh, function(tt)
 			if item then
 				itemsTab:AddItemTooltip(tt, item, slot)
+				if inactiveFlask then
+					tt:AddSeparator(10)
+					tt:AddLine(14, "^8This flask is not active in calculations (Items tab checkbox)")
+				end
 			else
 				tt:AddLine(16, "^7" .. slotName .. ": ^xF55454empty")
 				tt:AddLine(14, "^8Click to open the Items tab")
 			end
 		end, "ITEMS")
+	end
+	if status == "failed" then
+		Viz.text(cx, cy + ch - 14, "LEFT", 12, "VAR", Viz.fit(12, "VAR", "Item pictures need internet the first time (poe.ninja + GGG image server).", cw), col.muted)
 	end
 end
 
@@ -675,6 +799,7 @@ function OverviewTabClass:Draw(viewPort, inputEvents)
 	local gap = 14
 	local cardW = (w - gap * (cols - 1)) / cols
 	local cards = {
+		{ fn = self.CardInventory, h = self:InventoryHeight(cardW) },
 		{ fn = self.CardDamageTypes, h = 196 },
 		{ fn = self.CardDamageSources, h = 196 },
 		{ fn = self.CardOffense, h = 196 },
@@ -682,23 +807,24 @@ function OverviewTabClass:Draw(viewPort, inputEvents)
 		{ fn = self.CardMaxHit, h = 196 },
 		{ fn = self.CardAvoidance, h = 196 },
 		{ fn = self.CardSkills, h = 210 },
-		{ fn = self.CardGear, h = 210 },
 		{ fn = self.CardAilments, h = 210 },
 		{ fn = self.CardResources, h = 196 },
-		{ fn = self.CardAttributes, h = 196 },
 		{ fn = self.CardHealth, h = 196 },
+		{ fn = self.CardAttributes, h = 196 },
 	}
-	local rowY, rowH = y, 0
-	for i, card in ipairs(cards) do
-		local c = (i - 1) % cols
-		if c == 0 and i > 1 then rowY = rowY + rowH + gap; rowH = 0 end
-		local ok, err = pcall(card.fn, self, x + c * (cardW + gap), rowY, cardW, card.h, o)
+	local colY = { }
+	for c = 1, cols do colY[c] = y end
+	for _, card in ipairs(cards) do
+		local c = 1
+		for k = 2, cols do if colY[k] < colY[c] - 1 then c = k end end
+		local cx = x + (c - 1) * (cardW + gap)
+		local ok, err = pcall(card.fn, self, cx, colY[c], cardW, card.h, o)
 		if not ok then
-			Viz.text(x + c * (cardW + gap) + 12, rowY + 40, "LEFT", 14, "VAR", "Error: " .. tostring(err), col.bad)
+			Viz.text(cx + 12, colY[c] + 40, "LEFT", 14, "VAR", "Error: " .. tostring(err), col.bad)
 		end
-		rowH = m_max(rowH, card.h)
+		colY[c] = colY[c] + card.h + gap
 	end
-	local bottom = rowY + rowH + pad
+	local bottom = math.max(unpack(colY)) - gap + pad
 	self.contentHeight = bottom + self.scrollY
 
 	if maxScroll > 0 then
