@@ -182,7 +182,7 @@ function LiveServer:AddLiveHandlers(handlers)
 	handlers.set_view = function(params)
 		if not buildLoaded() then return { ok = false, error = "no build open in PoB" } end
 		local view = tostring(params.view or ""):upper()
-		local valid = { OVERVIEW = true, TREE = true, SKILLS = true, ITEMS = true, CALCS = true, CONFIG = true, NOTES = true, IMPORT = true, PARTY = true, COMPARE = true }
+		local valid = { OVERVIEW = true, ATLAS = true, TREE = true, SKILLS = true, ITEMS = true, CALCS = true, CONFIG = true, NOTES = true, IMPORT = true, PARTY = true, COMPARE = true }
 		if not valid[view] then return { ok = false, error = "unknown view: " .. view } end
 		build.viewMode = view
 		return { ok = true, view = view }

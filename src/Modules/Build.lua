@@ -470,10 +470,15 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 	end)
 	self.controls.modeCompare.locked = function() return self.viewMode == "COMPARE" end
 	-- Agent Edition: dashboard tab
-	self.controls.modeOverview = new("ButtonControl", {"LEFT",self.controls.modeCompare,"RIGHT"}, {4, 0, 148, 20}, "Overview", function()
+	self.controls.modeOverview = new("ButtonControl", {"LEFT",self.controls.modeCompare,"RIGHT"}, {4, 0, 72, 20}, "Overview", function()
 		self.viewMode = "OVERVIEW"
 	end)
 	self.controls.modeOverview.locked = function() return self.viewMode == "OVERVIEW" end
+	self.controls.modeAtlas = new("ButtonControl", {"LEFT",self.controls.modeOverview,"RIGHT"}, {4, 0, 72, 20}, "Atlas", function()
+		self.viewMode = "ATLAS"
+	end)
+	self.controls.modeAtlas.locked = function() return self.viewMode == "ATLAS" end
+	self.controls.modeAtlas.tooltipText = "Atlas passive tree planner (latest league data from GGG)"
 	-- Skills
 	self.controls.mainSkillLabel = new("LabelControl", {"TOPLEFT",self.anchorSideBar,"TOPLEFT"}, {0, 80, 300, 16}, "^7Main Skill:")
 	self.controls.mainSocketGroup = new("DropDownControl", {"TOPLEFT",self.controls.mainSkillLabel,"BOTTOMLEFT"}, {0, 2, 300, 18}, nil, function(index, value)
@@ -610,6 +615,7 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 	self.calcsTab = new("CalcsTab", self)
 	self.compareTab = new("CompareTab", self)
 	self.overviewTab = new("OverviewTab", self)
+	self.atlasTab = new("AtlasTab", self)
 	-- Used for pined calcs panes
 	self.overlayPanes = { }
 
@@ -624,6 +630,7 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 		["Skills"] = self.skillsTab,
 		["Calcs"] = self.calcsTab,
 		["Import"] = self.importTab,
+		["AtlasTree"] = self.atlasTab,
 	}
 	self.legacyLoaders = { -- Special loaders for legacy sections
 		["Spec"] = self.treeTab,
@@ -1005,7 +1012,7 @@ function buildMode:Save(xml)
 	xml.attrib = {
 		targetVersion = self.targetVersion,
 		-- Agent Edition: stock PoB has no OVERVIEW tab, so save it as TREE
-		viewMode = self.viewMode == "OVERVIEW" and "TREE" or self.viewMode,
+		viewMode = (self.viewMode == "OVERVIEW" or self.viewMode == "ATLAS") and "TREE" or self.viewMode,
 		level = tostring(self.characterLevel),
 		className = self.spec.curClassName,
 		ascendClassName = self.spec.curAscendClassName,
@@ -1300,6 +1307,8 @@ function buildMode:OnFrame(inputEvents)
 		self.compareTab:Draw(tabViewPort, inputEvents)
 	elseif self.viewMode == "OVERVIEW" then
 		self.overviewTab:Draw(tabViewPort, inputEvents)
+	elseif self.viewMode == "ATLAS" then
+		self.atlasTab:Draw(tabViewPort, inputEvents)
 	end
 
 	-- Draw overlay panes on top of all tab content (last = topmost)
@@ -1309,7 +1318,7 @@ function buildMode:OnFrame(inputEvents)
 		end
 	end
 
-	self.unsaved = self.modFlag or self.notesTab.modFlag or self.partyTab.modFlag or self.configTab.modFlag or self.treeTab.modFlag or self.treeTab.searchFlag or self.spec.modFlag or self.skillsTab.modFlag or self.itemsTab.modFlag or self.calcsTab.modFlag
+	self.unsaved = self.modFlag or self.notesTab.modFlag or self.partyTab.modFlag or self.configTab.modFlag or self.treeTab.modFlag or self.treeTab.searchFlag or self.spec.modFlag or self.skillsTab.modFlag or self.itemsTab.modFlag or self.calcsTab.modFlag or self.atlasTab.modFlag
 
 	SetDrawLayer(5)
 

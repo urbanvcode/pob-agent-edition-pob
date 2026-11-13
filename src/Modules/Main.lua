@@ -973,7 +973,7 @@ function main:OpenOptionsPopup(savedState)
 		-- Agent Edition: trade session id shared with AI tools (stored in AgentEdition.json, read by pob-mcp)
 		nextRow()
 		local agentSettings = LoadModule("Agent/Settings")
-		controls.tradeSessionId = new("EditControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 290, 18 }, agentSettings.get(self.userPath, "POESESSID") or "", nil, "%w", 64)
+		controls.tradeSessionId = new("EditControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 290, 18 }, agentSettings.get(self.userPath, "POESESSID") or "", nil, "%W", 64)
 		controls.tradeSessionId:SetProtected(true)
 		controls.tradeSessionIdLabel = new("LabelControl", { "RIGHT", controls.tradeSessionId, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Trade session ID (POESESSID):")
 		controls.tradeSessionId.tooltipText = "Agent Edition: your pathofexile.com POESESSID cookie.\nAI tools use it for weighted trade searches.\nIt works like a password: anyone with it is logged in as you.\nLeave empty to remove it. Logging out on the website invalidates it."
