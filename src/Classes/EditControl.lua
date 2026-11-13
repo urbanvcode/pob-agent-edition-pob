@@ -244,26 +244,22 @@ function EditClass:Draw(viewPort, noTooltip)
 	local enabled = self:IsEnabled()
 	local mOver = self:IsMouseOver()
 	if not enabled then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inBorderOff")
 	elseif mOver then
-		SetDrawColor(1, 1, 1)
+		UITheme.set("inBorderHi")
 	elseif self.borderFunc then
 		local r, g, b = self.borderFunc()
 		SetDrawColor(r, g, b)
 	else
-		SetDrawColor(0.5, 0.5, 0.5)
+		UITheme.set("inBorder")
 	end
 	DrawImage(nil, x, y, width, height)
 	if not enabled then
-		SetDrawColor(0, 0, 0)
+		UITheme.set("inFill")
 	elseif self.hasFocus or mOver then
-		if self.lineHeight then
-			SetDrawColor(0.1, 0.1, 0.1)
-		else
-			SetDrawColor(0.15, 0.15, 0.15)
-		end
+		UITheme.set("inFillHover")
 	else
-		SetDrawColor(0, 0, 0)
+		UITheme.set("inFill")
 	end
 	DrawImage(nil, x + 1, y + 1, width - 2, height - 2)
 	local textX = x + 2

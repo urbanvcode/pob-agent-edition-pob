@@ -469,6 +469,11 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 		self.viewMode = "COMPARE"
 	end)
 	self.controls.modeCompare.locked = function() return self.viewMode == "COMPARE" end
+	-- Agent Edition: dashboard tab
+	self.controls.modeOverview = new("ButtonControl", {"LEFT",self.controls.modeCompare,"RIGHT"}, {4, 0, 148, 20}, "Overview", function()
+		self.viewMode = "OVERVIEW"
+	end)
+	self.controls.modeOverview.locked = function() return self.viewMode == "OVERVIEW" end
 	-- Skills
 	self.controls.mainSkillLabel = new("LabelControl", {"TOPLEFT",self.anchorSideBar,"TOPLEFT"}, {0, 80, 300, 16}, "^7Main Skill:")
 	self.controls.mainSocketGroup = new("DropDownControl", {"TOPLEFT",self.controls.mainSkillLabel,"BOTTOMLEFT"}, {0, 2, 300, 18}, nil, function(index, value)
@@ -604,6 +609,7 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 	self.skillsTab = new("SkillsTab", self)
 	self.calcsTab = new("CalcsTab", self)
 	self.compareTab = new("CompareTab", self)
+	self.overviewTab = new("OverviewTab", self)
 	-- Used for pined calcs panes
 	self.overlayPanes = { }
 
@@ -998,7 +1004,8 @@ end
 function buildMode:Save(xml)
 	xml.attrib = {
 		targetVersion = self.targetVersion,
-		viewMode = self.viewMode,
+		-- Agent Edition: stock PoB has no OVERVIEW tab, so save it as TREE
+		viewMode = self.viewMode == "OVERVIEW" and "TREE" or self.viewMode,
 		level = tostring(self.characterLevel),
 		className = self.spec.curClassName,
 		ascendClassName = self.spec.curAscendClassName,
@@ -1291,6 +1298,8 @@ function buildMode:OnFrame(inputEvents)
 		self.calcsTab:Draw(tabViewPort, inputEvents)
 	elseif self.viewMode == "COMPARE" then
 		self.compareTab:Draw(tabViewPort, inputEvents)
+	elseif self.viewMode == "OVERVIEW" then
+		self.overviewTab:Draw(tabViewPort, inputEvents)
 	end
 
 	-- Draw overlay panes on top of all tab content (last = topmost)
@@ -1305,16 +1314,16 @@ function buildMode:OnFrame(inputEvents)
 	SetDrawLayer(5)
 
 	-- Draw top bar background
-	SetDrawColor(0.2, 0.2, 0.2)
+	UITheme.set("bar")
 	DrawImage(nil, 0, 0, main.screenW, 28)
-	SetDrawColor(0.85, 0.85, 0.85)
+	UITheme.set("divider")
 	DrawImage(nil, 0, 28, main.screenW, 4)
 	DrawImage(nil, main.screenW/2 - 2, 0, 4, 28)
 
 	-- Draw side bar background
-	SetDrawColor(0.1, 0.1, 0.1)
+	UITheme.set("panel")
 	DrawImage(nil, 0, 32, sideBarWidth - 4, main.screenH - 32)
-	SetDrawColor(0.85, 0.85, 0.85)
+	UITheme.set("divider")
 	DrawImage(nil, sideBarWidth - 4, 32, 4, main.screenH - 32)
 
 

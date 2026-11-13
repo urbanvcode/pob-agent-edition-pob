@@ -149,11 +149,11 @@ function ScrollBarClass:Draw()
 	end
 	-- Draw up/left button background
 	if not enabled then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inFillHover")
 	elseif mOverComp == "UP" then
-		SetDrawColor(1, 1, 1)
+		UITheme.set("inBorderHi")
 	else
-		SetDrawColor(0.5, 0.5, 0.5)
+		UITheme.set("inBorder")
 	end
 	if dir == "HORIZONTAL" then
 		DrawImage(nil, x, y, height, height)
@@ -161,9 +161,9 @@ function ScrollBarClass:Draw()
 		DrawImage(nil, x, y, width, width)
 	end
 	if enabled and mOverComp == "UP" then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inFillHover")
 	else
-		SetDrawColor(0, 0, 0)
+		UITheme.set("inFill")
 	end
 	if dir == "HORIZONTAL" then
 		DrawImage(nil, x + 1, y + 1, height - 2, height - 2)
@@ -172,11 +172,11 @@ function ScrollBarClass:Draw()
 	end
 	-- Draw up/left arrow
 	if not enabled then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inFillHover")
 	elseif mOverComp == "UP" then
-		SetDrawColor(1, 1, 1)
+		UITheme.set("inBorderHi")
 	else
-		SetDrawColor(0.5, 0.5, 0.5)
+		UITheme.set("inBorder")
 	end
 	if dir == "HORIZONTAL" then
 		main:DrawArrow(x + height/2, y + height/2, height/2, height/2, "LEFT")
@@ -185,11 +185,11 @@ function ScrollBarClass:Draw()
 	end
 	-- Draw down/right button background
 	if not enabled then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inFillHover")
 	elseif mOverComp == "DOWN" then
-		SetDrawColor(1, 1, 1)
+		UITheme.set("inBorderHi")
 	else
-		SetDrawColor(0.5, 0.5, 0.5)
+		UITheme.set("inBorder")
 	end
 	if dir == "HORIZONTAL" then
 		DrawImage(nil, x + width - height, y, height, height)
@@ -197,9 +197,9 @@ function ScrollBarClass:Draw()
 		DrawImage(nil, x, y + height - width, width, width)
 	end
 	if enabled and mOverComp == "DOWN" then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inFillHover")
 	else
-		SetDrawColor(0, 0, 0)
+		UITheme.set("inFill")
 	end
 	if dir == "HORIZONTAL" then
 		DrawImage(nil, x + width - height + 1, y + 1, height - 2, height - 2)
@@ -208,11 +208,11 @@ function ScrollBarClass:Draw()
 	end
 	-- Draw down/right arrow
 	if not enabled then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inFillHover")
 	elseif mOverComp == "DOWN" then
-		SetDrawColor(1, 1, 1)
+		UITheme.set("inBorderHi")
 	else
-		SetDrawColor(0.5, 0.5, 0.5)
+		UITheme.set("inBorder")
 	end
 	if dir == "HORIZONTAL" then
 		main:DrawArrow(x + width - height/2, y + height/2, height/2, height/2, "RIGHT")
@@ -221,27 +221,27 @@ function ScrollBarClass:Draw()
 	end
 	-- Draw slide background
 	if not enabled then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inFillHover")
 	elseif self.dragging or mOverComp == "KNOB" or mOverComp == "SLIDEUP" or mOverComp == "SLIDEDOWN" then
-		SetDrawColor(1, 1, 1)
+		UITheme.set("inBorderHi")
 	else
-		SetDrawColor(0.5, 0.5, 0.5)
+		UITheme.set("inBorder")
 	end
 	if dir == "HORIZONTAL" then
 		DrawImage(nil, x + height, y, width - height * 2, height)
-		SetDrawColor(0, 0, 0)
+		UITheme.set("inFill")
 		DrawImage(nil, x + height, y + 1, width - height * 2, height - 2)
 	else
 		DrawImage(nil, x, y + width, width, height - width * 2)
-		SetDrawColor(0, 0, 0)
+		UITheme.set("inFill")
 		DrawImage(nil, x + 1, y + width, width - 2, height - width * 2)
 	end
 	-- Draw knob
 	if enabled then
 		if self.dragging or mOverComp == "KNOB" then
-			SetDrawColor(1, 1, 1)
+			UITheme.set("inBorderHi")
 		else
-			SetDrawColor(0.5, 0.5, 0.5)
+			UITheme.set("inBorder")
 		end
 		local knobPos = self:GetKnobPosForOffset()
 		if dir == "HORIZONTAL" then

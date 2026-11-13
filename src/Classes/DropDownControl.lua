@@ -246,14 +246,14 @@ function DropDownClass:Draw(viewPort, noTooltip)
 	scrollBar:SetContentDimension(lineHeight * self:GetDropCount(), self.dropHeight)
 	local dropY = self.dropUp and y - dropExtra or y + height
 	if not enabled then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inBorderOff")
 	elseif mOver or self.dropped then
-		SetDrawColor(1, 1, 1)
+		UITheme.set("inBorderHi")
 	elseif self.borderFunc then
 		local r, g, b = self.borderFunc()
 		SetDrawColor(r, g, b)
 	else
-		SetDrawColor(0.5, 0.5, 0.5)
+		UITheme.set("inBorder")
 	end
 	DrawImage(nil, x, y, width, height)
 	if self.dropped then
@@ -262,24 +262,24 @@ function DropDownClass:Draw(viewPort, noTooltip)
 		SetDrawLayer(nil, 0)
 	end
 	if not enabled or self.dropped then
-		SetDrawColor(0, 0, 0)
+		UITheme.set("inFill")
 	elseif mOver then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inFillHover")
 	else
-		SetDrawColor(0, 0, 0)
+		UITheme.set("inFill")
 	end
 	DrawImage(nil, x + 1, y + 1, width - 2, height - 2)
 	if not enabled then
-		SetDrawColor(0.33, 0.33, 0.33)
+		UITheme.set("inBorderOff")
 	elseif mOver or self.dropped then
-		SetDrawColor(1, 1, 1)
+		UITheme.set("inBorderHi")
 	else
-		SetDrawColor(0.5, 0.5, 0.5)
+		UITheme.set("arrow")
 	end
 	main:DrawArrow(x + width - height/2, y + height/2, height/2, height/2, "DOWN")
 	if self.dropped then
 		SetDrawLayer(nil, 5)
-		SetDrawColor(0, 0, 0)
+		UITheme.set("inFill")
 		DrawImage(nil, x + 1, dropY + 1, self.droppedWidth - 2, dropExtra - 2)
 		SetDrawLayer(nil, 0)
 	end

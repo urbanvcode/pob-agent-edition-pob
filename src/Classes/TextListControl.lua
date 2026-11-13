@@ -32,9 +32,9 @@ function TextListClass:Draw(viewPort)
 		contentHeight = contentHeight + lineInfo.height
 	end
 	scrollBar:SetContentDimension(contentHeight, height - 4)
-	SetDrawColor(0.66, 0.66, 0.66)
+	UITheme.set("listBorder")
 	DrawImage(nil, x, y, width, height)
-	SetDrawColor(0.05, 0.05, 0.05)
+	UITheme.set("listFill")
 	DrawImage(nil, x + 1, y + 1, width - 2, height - 2)
 	self:DrawControls(viewPort)
 	SetViewport(x + 2, y + 2, width - 20, height - 4)

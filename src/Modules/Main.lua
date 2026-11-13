@@ -54,6 +54,7 @@ local tempTable2 = { }
 main = new("ControlHost")
 
 function main:Init()
+	LoadModule("Agent/Theme")
 	self:DetectUnicodeSupport()
 	self.modes = { }
 	self.modes["LIST"] = LoadModule("Modules/BuildList")
@@ -236,7 +237,17 @@ function main:Init()
 	self.controls.versionLabel.label = function()
 		return "^8" .. (launch.versionBranch == "beta" and "Beta: " or "Version: ") .. launch.versionNumber .. (launch.versionBranch == "dev" and " (Dev)" or "")
 	end
-	self.controls.devMode = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {0, -26, 0, 20}, colorCodes.NEGATIVE.."Dev Mode")
+	self.controls.devMode = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {0, -26, 0, 20}, function()
+		if not launch.agentEdition then return colorCodes.NEGATIVE.."Dev Mode" end
+		local server = launch.agentServer
+		local status = server and server.status or "off"
+		if status == "listening" and #server.clients > 0 then
+			return "^x4FD1C2Agent Edition ^7- AI connected"
+		elseif status == "listening" then
+			return "^x4FD1C2Agent Edition ^8- AI link ready"
+		end
+		return "^x4FD1C2Agent Edition ^8- AI link " .. status
+	end)
 	self.controls.devMode.shown = function()
 		return launch.devMode
 	end
@@ -246,7 +257,7 @@ function main:Init()
 	-- Initialize toast notification system
 	ToastNotification:Init(self.anchorMain)
 
-	if launch.devMode and GetTime() >= 0 and GetTime() < 15000 then
+	if launch.devMode and not launch.agentEdition and GetTime() >= 0 and GetTime() < 15000 then
 		ToastNotification:Add([[
 ^xFF7700Warning: ^7Developer Mode active!
 The program is currently running in developer

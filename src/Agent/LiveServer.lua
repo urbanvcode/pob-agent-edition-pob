@@ -178,11 +178,11 @@ function LiveServer:AddLiveHandlers(handlers)
 		return { ok = true, file = build.dbFileName }
 	end
 
-	-- Switch the visible tab: TREE, SKILLS, ITEMS, CALCS, CONFIG, NOTES, IMPORT, PARTY.
+	-- Switch the visible tab: OVERVIEW, TREE, SKILLS, ITEMS, CALCS, CONFIG, NOTES, IMPORT, PARTY.
 	handlers.set_view = function(params)
 		if not buildLoaded() then return { ok = false, error = "no build open in PoB" } end
 		local view = tostring(params.view or ""):upper()
-		local valid = { TREE = true, SKILLS = true, ITEMS = true, CALCS = true, CONFIG = true, NOTES = true, IMPORT = true, PARTY = true }
+		local valid = { OVERVIEW = true, TREE = true, SKILLS = true, ITEMS = true, CALCS = true, CONFIG = true, NOTES = true, IMPORT = true, PARTY = true, COMPARE = true }
 		if not valid[view] then return { ok = false, error = "unknown view: " .. view } end
 		build.viewMode = view
 		return { ok = true, view = view }
