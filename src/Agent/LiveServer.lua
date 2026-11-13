@@ -188,6 +188,13 @@ function LiveServer:AddLiveHandlers(handlers)
 		return { ok = true, view = view }
 	end
 
+	-- Open the Options popup (e.g. so the player can edit the Agent profile).
+	handlers.open_options = function()
+		if main.popups[1] then return { ok = false, error = "a popup is already open in PoB" } end
+		main:OpenOptionsPopup()
+		return { ok = true }
+	end
+
 	-- Dev helper: PoB's own full-window screenshot (saved by SimpleGraphic)
 	handlers.take_screenshot = function()
 		if not TakeScreenshot then return { ok = false, error = "not available" } end

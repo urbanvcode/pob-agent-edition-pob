@@ -6,6 +6,7 @@
 --
 local Viz = LoadModule("Agent/Viz")
 local Icons = LoadModule("Agent/IconCache")
+local AgentSettings = LoadModule("Agent/Settings")
 local col = Viz.col
 local m_max, m_min, m_floor, m_pi = math.max, math.min, math.floor, math.pi
 local t_insert = table.insert
@@ -185,15 +186,88 @@ function OverviewTabClass:HealthChecks(o)
 end
 
 -- Header and tiles -----------------------------------------------------------
+-- Player profile (AgentEdition.json), re-read every 2 s so changes made by
+-- an AI client (profile_set) show up without reopening anything.
+function OverviewTabClass:Profile()
+	local now = GetTime()
+	if not self.profile or now - (self.profileTime or 0) > 2000 then
+		local ok, profile = pcall(AgentSettings.getProfile, main.userPath)
+		self.profile = ok and profile or AgentSettings.normalizeProfile(nil)
+		self.profileTime = now
+	end
+	return self.profile
+end
+
+local MODE_COLOURS = { trade = col.accent, ssf = col.good, mixed = col.lightning }
+
+function OverviewTabClass:ProfileChips()
+	local p = self:Profile()
+	local function desc(list, value)
+		for _, entry in ipairs(list) do
+			if entry.value == value then return entry.desc end
+		end
+	end
+	local currency = { }
+	if p.currency.chaos > 0 then t_insert(currency, fmtInt(p.currency.chaos) .. "c") end
+	if p.currency.divine > 0 then t_insert(currency, fmtInt(p.currency.divine) .. " div") end
+	local chips = {
+		{ id = "pfMode", label = AgentSettings.label(AgentSettings.PLAY_MODES, p.playMode), c = MODE_COLOURS[p.playMode] or col.accent,
+			tip = { "^7Play mode: " .. AgentSettings.label(AgentSettings.PLAY_MODES, p.playMode), "^8" .. (desc(AgentSettings.PLAY_MODES, p.playMode) or "") } },
+		{ id = "pfLeague", label = p.league ~= "" and p.league or "Current league", c = col.text,
+			tip = { "^7League: " .. (p.league ~= "" and p.league or "not set (AI uses the current challenge league)") } },
+		{ id = "pfCurrency", label = #currency > 0 and table.concat(currency, "  ") or "Currency: not set", c = #currency > 0 and col.lightning or col.muted,
+			tip = { "^7Currency on hand: " .. (#currency > 0 and table.concat(currency, ", ") or "not set"),
+				p.currency.other ~= "" and ("^7Other: " .. p.currency.other) or "^8",
+				"^8The AI uses it as the budget for upgrade plans." } },
+		{ id = "pfExplain", label = AgentSettings.label(AgentSettings.EXPLANATION_MODES, p.explanationMode), c = col.muted,
+			tip = { "^7Explanations: " .. AgentSettings.label(AgentSettings.EXPLANATION_MODES, p.explanationMode),
+				"^8" .. (desc(AgentSettings.EXPLANATION_MODES, p.explanationMode) or ""),
+				"^8Explained topics: " .. #p.learnedTopics } },
+	}
+	for _, chip in ipairs(chips) do
+		t_insert(chip.tip, "^8")
+		if #p.goals > 0 then t_insert(chip.tip, "^7Goals: ^8" .. table.concat(p.goals, ", ")) end
+		t_insert(chip.tip, "^xFFB040Click to edit the Agent profile in Options")
+		chip.w = Viz.textWidth(14, "VAR", chip.label) + 20
+	end
+	return chips
+end
+
+-- Draws chips right-aligned ending at xRight. Returns total width.
+function OverviewTabClass:DrawChips(chips, xRight, y)
+	local cx = xRight
+	for i = #chips, 1, -1 do
+		local chip = chips[i]
+		cx = cx - chip.w
+		local hovered = self:IsHot(chip.id)
+		Viz.softRect(cx, y, chip.w, 24, hovered and col.cardHi or col.card)
+		Viz.outline(cx, y, chip.w, 24, hovered and col.accent or Viz.mix(col.border, chip.c, 0.35))
+		Viz.text(cx + 10, y + 5, "LEFT", 14, "VAR", chip.label, chip.c)
+		self:Hot(chip.id, cx, y, chip.w, 24, chip.tip, function() main:OpenOptionsPopup() end)
+		cx = cx - 6
+	end
+	return xRight - cx - 6
+end
+
 function OverviewTabClass:DrawHeader(x, y, w, o)
 	local spec = self.build.spec
-	Viz.text(x, y, "LEFT", 26, "VAR BOLD", Viz.fit(26, "VAR BOLD", self.build.buildName or "Unnamed build", w), col.text)
+	local chips = self:ProfileChips()
+	local chipsW = -6
+	for _, chip in ipairs(chips) do chipsW = chipsW + chip.w + 6 end
+	local chipsInline = chipsW <= w * 0.55
+	local titleW = chipsInline and (w - chipsW - 16) or w
+	if chipsInline then self:DrawChips(chips, x + w, y + 2) end
+	Viz.text(x, y, "LEFT", 26, "VAR BOLD", Viz.fit(26, "VAR BOLD", self.build.buildName or "Unnamed build", titleW), col.text)
 	local parts = { string.format("Level %d %s", self.build.characterLevel or 1, spec.curClassName or "?") }
 	if spec.curAscendClassName and spec.curAscendClassName ~= "None" then t_insert(parts, spec.curAscendClassName) end
 	if spec.curSecondaryAscendClassName and spec.curSecondaryAscendClassName ~= "None" then t_insert(parts, spec.curSecondaryAscendClassName) end
 	local skill = self:MainSkillName()
 	if skill then t_insert(parts, "Main skill: " .. skill) end
 	Viz.text(x, y + 32, "LEFT", 16, "VAR", Viz.fit(16, "VAR", table.concat(parts, "   |   "), w), col.muted)
+	if not chipsInline then
+		self:DrawChips(chips, x + m_min(w, chipsW), y + 58)
+		return 88
+	end
 	return 56
 end
 

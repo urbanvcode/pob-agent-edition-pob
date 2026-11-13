@@ -877,6 +877,9 @@ function main:OpenOptionsPopup(savedState)
 
 	-- NOTE: Height needs to be adjusted if more menu options are added
 	local oneColumnHeightReq = 850 -- Min height required to not split menu into two columns
+	if launch.agentEdition then
+		oneColumnHeightReq = oneColumnHeightReq + 26 * 11 -- Trade session ID row + Agent profile section
+	end
 	local columnWidth = 600
 	
 	local startingY = 20
@@ -1173,6 +1176,112 @@ function main:OpenOptionsPopup(savedState)
 		controls.disableDevAutoSave.state = self.disableDevAutoSave
 	end
 
+	local saveAgentProfile
+	if launch.agentEdition then
+		-- Agent Edition: player profile shared with every AI client (AgentEdition.json, pob-mcp profile_get/profile_set)
+		nextRow()
+		local agentSettings = LoadModule("Agent/Settings")
+		local profile = agentSettings.getProfile(self.userPath)
+		drawSectionHeader("agent", "Agent profile (AI)")
+
+		local function choiceList(entries)
+			local list = { }
+			for _, entry in ipairs(entries) do
+				t_insert(list, { label = entry.label, value = entry.value })
+			end
+			return list
+		end
+		local function choiceTooltip(intro, entries)
+			local lines = { intro }
+			for _, entry in ipairs(entries) do
+				if entry.desc then t_insert(lines, entry.label .. ": " .. entry.desc) end
+			end
+			return table.concat(lines, "\n")
+		end
+
+		controls.agentPlayMode = new("DropDownControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 150, 18 }, choiceList(agentSettings.PLAY_MODES))
+		controls.agentPlayModeLabel = new("LabelControl", { "RIGHT", controls.agentPlayMode, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Play mode:")
+		controls.agentPlayMode.tooltipText = choiceTooltip("How you get items. The AI adapts every suggestion to it.", agentSettings.PLAY_MODES)
+		controls.agentPlayMode:SelByValue(profile.playMode, "value")
+
+		nextRow()
+		controls.agentLeague = new("EditControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 220, 18 }, profile.league, nil, nil, 50)
+		controls.agentLeagueLabel = new("LabelControl", { "RIGHT", controls.agentLeague, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7League:")
+		controls.agentLeague.tooltipText = "Trade league name as on pathofexile.com (e.g. 'Standard', 'Hardcore', or the current league).\nLeave empty and the AI uses the current challenge league (checked with get_leagues)."
+
+		nextRow()
+		controls.agentChaos = new("EditControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 90, 18 }, tostring(profile.currency.chaos), nil, "%D", 7)
+		controls.agentChaosLabel = new("LabelControl", { "RIGHT", controls.agentChaos, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Currency on hand, chaos:")
+		controls.agentChaos.tooltipText = "Chaos Orbs you can spend. The AI uses it as the budget for upgrade plans.\nUpdate it when it changes, or tell the AI ('I have 300c')."
+		controls.agentDivine = new("EditControl", { "LEFT", controls.agentChaos, "RIGHT" }, { 70, 0, 90, 18 }, tostring(profile.currency.divine), nil, "%D", 6)
+		controls.agentDivineLabel = new("LabelControl", { "RIGHT", controls.agentDivine, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7divine:")
+		controls.agentDivine.tooltipText = "Divine Orbs you can spend (PoE1's high-value currency; prices above ~100-200c are listed in divines)."
+
+		nextRow()
+		controls.agentOtherCurrency = new("EditControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 290, 18 }, profile.currency.other, nil, nil, 120)
+		controls.agentOtherCurrencyLabel = new("LabelControl", { "RIGHT", controls.agentOtherCurrency, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Other currency:")
+		controls.agentOtherCurrency.tooltipText = "Optional: other currency or crafting materials you have, e.g. 20 alch, 5 exalted."
+
+		nextRow()
+		controls.agentGoals = new("EditControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 290, 18 }, table.concat(profile.goals, ", "), nil, nil, 300)
+		controls.agentGoalsLabel = new("LabelControl", { "RIGHT", controls.agentGoals, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Goals:")
+		controls.agentGoals.tooltipText = "What you want the build to do, separated by commas.\nExamples: league start, farm maps, kill Uber Elder, beat all pinnacle bosses."
+
+		nextRow()
+		controls.agentExperience = new("DropDownControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 220, 18 }, choiceList(agentSettings.EXPERIENCE))
+		controls.agentExperienceLabel = new("LabelControl", { "RIGHT", controls.agentExperience, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Experience:")
+		controls.agentExperience.tooltipText = "How well you know Path of Exile 1. The AI compares with PoE2 when you know PoE2."
+		controls.agentExperience:SelByValue(profile.experience, "value")
+
+		nextRow()
+		controls.agentExplanation = new("DropDownControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 150, 18 }, choiceList(agentSettings.EXPLANATION_MODES))
+		controls.agentExplanationLabel = new("LabelControl", { "RIGHT", controls.agentExplanation, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Explanations:")
+		controls.agentExplanation.tooltipText = choiceTooltip("How much the AI explains.", agentSettings.EXPLANATION_MODES)
+		controls.agentExplanation:SelByValue(profile.explanationMode, "value")
+
+		nextRow()
+		local topicCount = #profile.learnedTopics
+		local resetTopics = false
+		controls.agentTopicsReset = new("ButtonControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 90, 18 }, "Reset", function()
+			resetTopics = true
+		end)
+		controls.agentTopicsReset.enabled = function() return topicCount > 0 and not resetTopics end
+		controls.agentTopicsReset.tooltipFunc = function(tooltip)
+			tooltip:Clear()
+			if resetTopics then
+				tooltip:AddLine(14, "^7Topics will be explained again after you click Save.")
+				return
+			end
+			tooltip:AddLine(14, "^7In Teach mode the AI explains a mechanic once, then remembers it here.")
+			tooltip:AddLine(14, "^7Reset to have everything explained again.")
+			for i, topic in ipairs(profile.learnedTopics) do
+				if i > 25 then tooltip:AddLine(14, "^8and " .. (topicCount - 25) .. " more") break end
+				tooltip:AddLine(14, "^8" .. topic)
+			end
+		end
+		controls.agentTopicsLabel = new("LabelControl", { "RIGHT", controls.agentTopicsReset, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, function()
+			if resetTopics then return "^7Explained topics: ^xFFB040reset on Save" end
+			return "^7Explained topics: ^x8C99AD" .. topicCount
+		end)
+
+		saveAgentProfile = function()
+			local fields = {
+				playMode = controls.agentPlayMode:GetSelValueByKey("value"),
+				league = controls.agentLeague.buf,
+				currency = {
+					chaos = tonumber(controls.agentChaos.buf) or 0,
+					divine = tonumber(controls.agentDivine.buf) or 0,
+					other = controls.agentOtherCurrency.buf,
+				},
+				goals = agentSettings.parseList(controls.agentGoals.buf),
+				experience = controls.agentExperience:GetSelValueByKey("value"),
+				explanationMode = controls.agentExplanation:GetSelValueByKey("value"),
+			}
+			if resetTopics then fields.learnedTopics = { } end
+			agentSettings.setProfile(self.userPath, fields)
+		end
+	end
+
 	controls.betaTest.state = self.betaTest
 	controls.edgeSearchHighlight.state = self.edgeSearchHighlight
 	controls.titlebarName.state = self.showTitlebarName
@@ -1198,6 +1307,9 @@ function main:OpenOptionsPopup(savedState)
 		end
 		if controls.tradeSessionId then
 			LoadModule("Agent/Settings").set(self.userPath, "POESESSID", controls.tradeSessionId.buf)
+		end
+		if saveAgentProfile then
+			saveAgentProfile()
 		end
 		if controls.buildPath.buf:match("%S") then
 			self.buildPath = controls.buildPath.buf
