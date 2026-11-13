@@ -9,6 +9,7 @@ local Icons = LoadModule("Agent/IconCache")
 local AgentSettings = LoadModule("Agent/Settings")
 local Progress = LoadModule("Agent/ProgressCard")
 local GuideCard = LoadModule("Agent/GuideCard")
+local LevellingCard = LoadModule("Agent/LevellingCard")
 local col = Viz.col
 local m_max, m_min, m_floor, m_pi = math.max, math.min, math.floor, math.pi
 local t_insert = table.insert
@@ -1145,6 +1146,11 @@ function OverviewTabClass:CardGuide(x, y, w, h, o)
 	GuideCard.draw(self, x, y, w, h)
 end
 
+-- Levelling (next steps through the campaign, below level 90, Agent/LevellingCard.lua)
+function OverviewTabClass:CardLevelling(x, y, w, h, o)
+	LevellingCard.draw(self, x, y, w, h)
+end
+
 -- Progress (timeline of the synced character, Agent/ProgressCard.lua) ---------
 function OverviewTabClass:CardProgress(x, y, w, h, o)
 	Progress.draw(self, x, y, w, h)
@@ -1213,6 +1219,7 @@ function OverviewTabClass:Draw(viewPort, inputEvents)
 		{ fn = self.CardAtlas, h = 196 },
 		{ fn = self.CardAttributes, h = 196 },
 	}
+	if LevellingCard.show(self.build) then table.insert(cards, 2, { fn = self.CardLevelling, h = LevellingCard.height }) end
 	local colY = { }
 	for c = 1, cols do colY[c] = y end
 	for _, card in ipairs(cards) do

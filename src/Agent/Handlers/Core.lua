@@ -366,4 +366,7 @@ loadfile(ADAPTER_DIR .. 'Tools.lua')(handlers, BuildOps, op, ADAPTER_DIR)
 -- Guide mode (Stage 3): guide stages, guide data, gap to a guide stage
 loadfile(ADAPTER_DIR .. 'Guide.lua')(handlers, BuildOps)
 
+-- Levelling coach (Stage 7): act-by-act plan, milestones, checkpoints, next steps
+loadfile(ADAPTER_DIR .. 'Levelling.lua')(handlers, BuildOps)
+
 return handlers, BuildOps
