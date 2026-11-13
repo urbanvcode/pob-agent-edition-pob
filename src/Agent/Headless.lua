@@ -25,6 +25,21 @@ end
 
 dofile('HeadlessWrapper.lua')
 
+-- HeadlessWrapper's MakeDir does nothing; tree packs (Agent/TreePacks.lua) need real folders.
+do
+	local ok, ffi = pcall(require, 'ffi')
+	if ok and pcall(ffi.cdef, 'int _mkdir(const char *path);') then
+		MakeDir = function(path)
+			local p = tostring(path):gsub('[/\\]+', '/')
+			local acc = p:sub(1, 1) == '/' and '/' or ''
+			for part in p:gmatch('[^/]+') do
+				acc = (acc == '' or acc == '/') and (acc .. part) or (acc .. '/' .. part)
+				if not part:match(':$') then pcall(ffi.C._mkdir, acc) end
+			end
+		end
+	end
+end
+
 -- HeadlessWrapper stubs Inflate() to return "", which makes PoB's timeless
 -- jewel loader overwrite its .bin cache with an empty file. Provide the real
 -- thing through zlib (shipped in runtime/).

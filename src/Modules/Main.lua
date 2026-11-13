@@ -492,6 +492,8 @@ function main:OnChar(key)
 end
 
 function main:SetMode(newMode, ...)
+	-- Agent Edition: a build that needs a passive tree pack downloads it first (Agent/TreePacks.lua)
+	if newMode == "BUILD" and launch.agentEdition and LoadModule("Agent/TreePacks").InterceptBuildOpen({...}) then return end
 	self.newMode = newMode
 	self.newModeArgs = {...}
 	self.predefinedBuildName = nil

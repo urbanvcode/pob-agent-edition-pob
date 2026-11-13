@@ -21,16 +21,39 @@ local LiveServer = {
 -- SimpleGraphic skips OnFrame entirely while the window is unfocused and the
 -- cursor is elsewhere, unless a coroutine is suspended. We keep one suspended
 -- coroutine alive so frames (and this server) keep running, and throttle
--- ourselves with socket.select so an unfocused PoB idles at ~10 fps but wakes
--- instantly when a request arrives.
-local windowActive = function() return true end
+-- ourselves with socket.select, which wakes instantly when a request arrives:
+--   focused, or the cursor over the window: no throttle (PoB's normal speed)
+--   unfocused, AI active in the last 30 s:   10 fps
+--   unfocused, quiet:                       about 3 fps
+--   minimised:                                1 fps
+-- (Stage 17: the old fixed 10 fps cost about 7% of a core while PoB sat in the background.)
+local IDLE_AFTER_MS = 30000
+local windowState = function() return "active" end
 do
 	local ok, ffi = pcall(require, "ffi")
 	if ok and ffi.os == "Windows" then
-		pcall(ffi.cdef, "void* GetActiveWindow(void);")
+		-- One declaration at a time: another module may have declared some already
+		for _, decl in ipairs({ "typedef struct { int32_t x; int32_t y; } AgentPoint;", "void* GetActiveWindow(void);",
+			"int GetCursorPos(AgentPoint *p);", "void* WindowFromPoint(int64_t p);",
+			"void* GetAncestor(void *h, unsigned int flags);", "int IsIconic(void *h);" }) do
+			pcall(ffi.cdef, decl)
+		end
 		local user32ok, user32 = pcall(ffi.load, "user32")
-		if user32ok then
-			windowActive = function() return user32.GetActiveWindow() ~= nil end
+		if user32ok and pcall(function() return user32.GetActiveWindow, user32.GetCursorPos, user32.WindowFromPoint, user32.GetAncestor, user32.IsIconic end) then
+			local own  -- our top-level window, remembered while it is active
+			local pt = ffi.new("AgentPoint")
+			windowState = function()
+				local active = user32.GetActiveWindow()
+				if active ~= nil then own = active end
+				if own ~= nil and user32.IsIconic(own) ~= 0 then return "minimised" end
+				if active ~= nil then return "active" end
+				if own == nil then return "background" end
+				if user32.GetCursorPos(pt) ~= 0 then
+					local under = user32.WindowFromPoint(ffi.cast("int64_t", pt.y) * 4294967296 + ffi.cast("uint32_t", pt.x))
+					if under ~= nil and user32.GetAncestor(under, 2) == own then return "active" end
+				end
+				return "background"
+			end
 		end
 	end
 end
@@ -111,9 +134,20 @@ function LiveServer:AddLiveHandlers(handlers)
 		} }
 	end
 
+	-- Tree packs (Agent/TreePacks.lua): a build from the AI downloads missing trees right away, no popup.
+	local function treesFor(xmlText)
+		local TreePacks = LoadModule("Agent/TreePacks")
+		for _, ver in ipairs(TreePacks.MissingInXml(xmlText)) do
+			local ok, err = TreePacks.Download(ver)
+			if not ok then return TreePacks.OfflineMessage(ver, err):gsub("\n", " ") end
+		end
+	end
+
 	-- Load XML into the window as a new, unsaved build (headless-compatible).
 	handlers.load_build_xml = function(params)
 		if type(params.xml) ~= "string" then return { ok = false, error = "missing xml" } end
+		local treeErr = treesFor(params.xml)
+		if treeErr then return { ok = false, error = treeErr } end
 		main:SetMode("BUILD", false, (params.name and tostring(params.name)) or "Agent Build", params.xml)
 		return defer(function()
 			setBuildGlobal()
@@ -129,6 +163,8 @@ function LiveServer:AddLiveHandlers(handlers)
 		if type(params.xml) ~= "string" then return { ok = false, error = "missing xml" } end
 		if not buildLoaded() then return { ok = false, error = "no build open in PoB" } end
 		local file, name, view = build.dbFileName, build.buildName, build.viewMode
+		local treeErr = treesFor(params.xml)
+		if treeErr then return { ok = false, error = treeErr } end
 		main:SetMode("BUILD", file or false, name, params.xml)
 		return defer(function()
 			setBuildGlobal()
@@ -146,7 +182,9 @@ function LiveServer:AddLiveHandlers(handlers)
 		path = path:gsub("\\", "/")
 		local f = io.open(path, "r")
 		if not f then return { ok = false, error = "file not found: " .. path } end
+		local treeErr = treesFor(f:read("*a"))
 		f:close()
+		if treeErr then return { ok = false, error = treeErr } end
 		local name = params.name or path:match("([^/]+)%.xml$") or path
 		main:SetMode("BUILD", path, name)
 		return defer(function()
@@ -242,6 +280,16 @@ function LiveServer:AddLiveHandlers(handlers)
 		return { ok = true, count = #params.items, tab = tab }
 	end
 
+	-- Memory of this PoB (Stage 17 leak test): Lua heap and what is loaded.
+	handlers.memory = function(params)
+		if params and params.collect then collectgarbage("collect") end
+		local trees = { }
+		for ver in pairs(main and main.tree or { }) do trees[#trees + 1] = ver end
+		table.sort(trees)
+		return { ok = true, luaKb = math.floor(collectgarbage("count")), trees = trees,
+			popups = main and #main.popups or 0, clients = #self.clients, window = windowState(), frames = self.frames or 0 }
+	end
+
 	handlers.get_capabilities = function()
 		local actions = {}
 		for name in pairs(handlers) do table.insert(actions, name) end
@@ -289,6 +337,7 @@ function LiveServer:Send(client, value)
 end
 
 function LiveServer:Dispatch(client, request)
+	self.lastActivityAt = GetTime()
 	if type(request) ~= "table" then
 		return { ok = false, error = "invalid request: expected a JSON object" }
 	end
@@ -329,11 +378,24 @@ function LiveServer:Poll()
 	for _, client in ipairs(self.clients) do
 		if client.pending then busy = true break end
 	end
-	if not busy and not windowActive() then
-		-- Unfocused: sleep up to 100 ms, waking at once on a connection or request.
+	self.frames = (self.frames or 0) + 1
+	local state = (not busy) and windowState() or "active"
+	local now = GetTime()
+	if state == "active" then self.lastActivityAt = now end
+	if state ~= "active" then
+		-- Unfocused: sleep, waking at once on a connection or request.
+		local quiet = now - (self.lastActivityAt or 0) > IDLE_AFTER_MS
+		local wait = state == "minimised" and 1.0 or (quiet and 0.33 or 0.1)
+		-- PoB lets Lua's heap grow to 4x its live size between collections (setpause 400, fast while
+		-- calculating). Once PoB sits quiet in the background, collect fully, then again every 5 minutes.
+		local collected = self.collectedAt or -1e12
+		if quiet and (collected < (self.lastActivityAt or 0) or now - collected > 300000) then
+			collectgarbage("collect")
+			self.collectedAt = now
+		end
 		local watch = { self.server }
 		for _, client in ipairs(self.clients) do table.insert(watch, client.sock) end
-		socket.select(watch, nil, 0.1)
+		socket.select(watch, nil, wait)
 	end
 	while true do
 		local sock = self.server:accept()

@@ -57,6 +57,8 @@ local PassiveTreeClass = newClass("PassiveTree", function(self, treeVersion)
 	self.tattoo = LoadModule("Data/TattooPassives")
 
 	MakeDir("TreeData")
+	-- Agent Edition: Ruthless and older trees are downloaded when first needed (Agent/TreePacks.lua)
+	LoadModule("Agent/TreePacks").Ensure(treeVersion)
 
 	ConPrintf("Loading passive tree data for version '%s'...", treeVersions[treeVersion].display)
 	local treeText
