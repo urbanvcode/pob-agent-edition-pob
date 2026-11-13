@@ -70,6 +70,12 @@ function launch:OnInit()
 	if agentFile and not HEADLESS then
 		agentFile:close()
 		self.agentEdition = true
+		local okVer, update = pcall(LoadModule, "Agent/Update")
+		self.agentVersion = okVer and update.version() or nil
+		if self.agentVersion then
+			APP_NAME = "Path of Building Agent Edition " .. self.agentVersion
+			SetWindowTitle(APP_NAME)
+		end
 	end
 	RenderInit("DPI_AWARE")
 	ConPrintf("Loading main script...")
@@ -93,6 +99,12 @@ function launch:OnInit()
 		else
 			self.agentServer = server
 			PCall(server.Start, server)
+		end
+		-- Daily release check (PoB's own updater stays off: it would install official PoB)
+		local okUpd, update = pcall(LoadModule, "Agent/Update")
+		if okUpd and self.main.userPath then
+			local okCheck, err = pcall(update.check, self.main.userPath, false)
+			if not okCheck then ConPrintf("[Agent] update check failed: %s", tostring(err)) end
 		end
 	end
 

@@ -251,6 +251,122 @@ function OverviewTabClass:DrawChips(chips, xRight, y)
 	return xRight - cx - 6
 end
 
+-- Update banner ---------------------------------------------------------------
+-- Shown when a newer PoB Agent Edition release is out (Agent/Update.lua keeps
+-- the daily check in AgentEdition.json). Re-read every 5 s.
+function OverviewTabClass:UpdateInfo()
+	local now = GetTime()
+	if self.updateTime == nil or now - self.updateTime > 5000 then
+		self.updateTime = now
+		local ok, Update = pcall(LoadModule, "Agent/Update")
+		self.updateInfo = nil
+		if ok and main.userPath then
+			local okA, info = pcall(Update.available, main.userPath)
+			if okA and info then
+				info.kind = "release"
+				self.updateInfo = info
+			elseif Update.installType() == "git" then
+				local okB, base = pcall(Update.baseNewer, main.userPath)
+				local st = Update.state(main.userPath)
+				if okB and base and (tonumber(st.snoozeUntil) or 0) <= os.time() then
+					self.updateInfo = { kind = "base", version = base, current = launch.versionNumber }
+				end
+			end
+		end
+	end
+	return self.updateInfo
+end
+
+function OverviewTabClass:OpenUpdateNotes(info)
+	local Update = LoadModule("Agent/Update")
+	local width = 640
+	local lines = { }
+	for para in (Update.plainNotes(info.notes) .. "\n"):gmatch("([^\n]*)\n") do
+		if para == "" then
+			t_insert(lines, "")
+		else
+			for _, l in ipairs(main:WrapString(para, 16, width - 40)) do t_insert(lines, l) end
+		end
+	end
+	while lines[1] == "" do table.remove(lines, 1) end
+	local maxLines = 26
+	if #lines > maxLines then
+		for i = #lines, maxLines + 1, -1 do lines[i] = nil end
+		t_insert(lines, "^8... more on the release page")
+	end
+	local controls = { }
+	for i, l in ipairs(lines) do
+		controls["l" .. i] = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 20 + (i - 1) * 17, 0, 16 }, "^7" .. l)
+	end
+	local height = 80 + #lines * 17
+	controls.update = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, { -150, -10, 120, 20 }, "Update now", function()
+		main:ClosePopup()
+		self:StartUpdate(info)
+	end)
+	controls.page = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, { 0, -10, 140, 20 }, "Release page", function()
+		if info.url then OpenURL(info.url) end
+	end)
+	controls.close = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, { 150, -10, 120, 20 }, "Close", function()
+		main:ClosePopup()
+	end)
+	main:OpenPopup(width, height, "What's new in v" .. info.version, controls, nil, nil, "close")
+end
+
+function OverviewTabClass:StartUpdate(info)
+	if self.build.unsaved then
+		main:OpenMessagePopup("Save first", "This build has unsaved changes.\nSave it (Ctrl+S) before updating: PoB closes during the update.")
+		return
+	end
+	local Update = LoadModule("Agent/Update")
+	main:OpenConfirmPopup("Update PoB Agent Edition",
+		"PoB closes, updates to v" .. info.version .. " and starts again.\nYour builds and settings are kept, and the old version is kept as a backup\n(tools\\update.ps1 -Rollback returns to it).",
+		"Update now", function()
+			local ok, err = Update.startUpdater("-Yes -Version " .. info.version)
+			if ok then Exit() else main:OpenMessagePopup("Update", "Could not start the updater: " .. tostring(err)) end
+		end)
+end
+
+function OverviewTabClass:DrawUpdateBanner(x, y, w)
+	local info = self:UpdateInfo()
+	if not info then return 0 end
+	local Update = LoadModule("Agent/Update")
+	local h = 34
+	local c = info.kind == "release" and col.accent or col.muted
+	Viz.softRect(x, y, w, h, Viz.mix(col.card, c, 0.12))
+	Viz.outline(x, y, w, h, Viz.mix(col.border, c, 0.6))
+	local buttons
+	if info.kind == "release" then
+		buttons = {
+			{ id = "updNotes", label = "What's new", click = function() self:OpenUpdateNotes(info) end },
+			{ id = "updNow", label = "Update now", strong = true, click = function() self:StartUpdate(info) end },
+			{ id = "updLater", label = "Later", click = function() Update.later(main.userPath); self.updateTime = nil end },
+			{ id = "updSkip", label = "Skip this version", click = function() Update.skip(main.userPath, info.version); self.updateTime = nil end },
+		}
+	else
+		buttons = { { id = "updLater", label = "Later", click = function() Update.later(main.userPath); self.updateTime = nil end } }
+	end
+	local bx = x + w - 6
+	for i = #buttons, 1, -1 do
+		local b = buttons[i]
+		local bw = Viz.textWidth(14, "VAR", b.label) + 18
+		bx = bx - bw
+		local hot = self:IsHot(b.id)
+		Viz.softRect(bx, y + 5, bw, 24, hot and col.cardHi or col.card)
+		Viz.outline(bx, y + 5, bw, 24, (hot or b.strong) and col.accent or col.border)
+		Viz.text(bx + 9, y + 9, "LEFT", 14, "VAR", b.label, b.strong and col.accent or col.text)
+		self:Hot(b.id, bx, y + 5, bw, 24, nil, b.click)
+		bx = bx - 6
+	end
+	local msg
+	if info.kind == "release" then
+		msg = string.format("PoB Agent Edition v%s is available (you have v%s).", info.version, info.current)
+	else
+		msg = string.format("Developer: official PoB v%s is newer than our base v%s. Run tools\\update-pob.ps1 -Check.", info.version, tostring(info.current))
+	end
+	Viz.text(x + 12, y + 9, "LEFT", 15, "VAR", Viz.fit(15, "VAR", msg, bx - x - 18), info.kind == "release" and col.text or col.muted)
+	return h
+end
+
 function OverviewTabClass:DrawHeader(x, y, w, o)
 	local spec = self.build.spec
 	local chips = self:ProfileChips()
@@ -984,6 +1100,8 @@ function OverviewTabClass:Draw(viewPort, inputEvents)
 	local x, w = pad, viewPort.width - pad * 2
 	local y = pad - self.scrollY
 
+	local bannerH = self:DrawUpdateBanner(x, y, w)
+	if bannerH > 0 then y = y + bannerH + 10 end
 	y = y + self:DrawHeader(x, y, w, o) + 10
 	y = y + self:DrawTiles(x, y, w, o) + 14
 

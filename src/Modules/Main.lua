@@ -84,8 +84,12 @@ function main:Init()
 	if not ignoreBuild then
 		self:SetMode("BUILD", false, "Unnamed build")
 	end
-	-- Agent Edition runs from the repo (dev mode) but shares the normal user folder and builds
-	if (launch.devMode and not launch.agentEdition) or (GetScriptPath() == GetRuntimePath() and not launch.installedMode) then
+	-- Agent Edition runs from the repo (dev mode) but shares the normal user folder and builds,
+	-- unless portable.txt in its root keeps them inside the folder (Agent/Update.lua)
+	local agentPortablePath = launch.agentEdition and LoadModule("Agent/Update").portableUserPath()
+	if agentPortablePath then
+		self.userPath = agentPortablePath
+	elseif (launch.devMode and not launch.agentEdition) or (GetScriptPath() == GetRuntimePath() and not launch.installedMode) then
 		-- If running in dev mode or standalone mode, put user data in the script path
 		self.userPath = GetScriptPath().."/"
 	else
@@ -250,7 +254,7 @@ function main:Init()
 	end
 	self.controls.devMode = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {0, -26, 0, 20}, function()
 		if not launch.agentEdition then return colorCodes.NEGATIVE.."Dev Mode" end
-		return "^x4FD1C2Agent Edition"
+		return "^x4FD1C2Agent Edition" .. (launch.agentVersion and (" v" .. launch.agentVersion) or "")
 	end)
 	self.controls.devMode.shown = function()
 		return launch.devMode
@@ -980,6 +984,31 @@ function main:OpenOptionsPopup(savedState)
 		controls.tradeSessionId:SetProtected(true)
 		controls.tradeSessionIdLabel = new("LabelControl", { "RIGHT", controls.tradeSessionId, "LEFT" }, { defaultLabelSpacingPx, 0, 0, 16 }, "^7Trade session ID (POESESSID):")
 		controls.tradeSessionId.tooltipText = "Agent Edition: your pathofexile.com POESESSID cookie.\nAI tools use it for weighted trade searches.\nIt works like a password: anyone with it is logged in as you.\nLeave empty to remove it. Logging out on the website invalidates it."
+
+		-- Agent Edition: daily check for a new release on GitHub (Agent/Update.lua)
+		nextRow()
+		local agentUpdate = LoadModule("Agent/Update")
+		controls.agentUpdateCheck = new("CheckBoxControl", { "TOPLEFT", controls.sectionAnchor, "TOPLEFT" }, { currentX + defaultLabelPlacementX, currentY, 20 }, "^7Check for Agent Edition updates:", nil)
+		controls.agentUpdateCheck.state = agentUpdate.enabled(self.userPath)
+		controls.agentUpdateCheck.tooltipText = "Once a day, ask GitHub whether a newer PoB Agent Edition is out.\nThe Overview then shows a banner with the changes and an Update now button.\nNothing is sent except the version request.\nYou are on v" .. tostring(agentUpdate.version() or "?") .. " (" .. agentUpdate.installType() .. " install)."
+		controls.agentUpdateNow = new("ButtonControl", { "LEFT", controls.agentUpdateCheck, "RIGHT" }, { 8, 0, 90, 20 }, "Check now", function()
+			controls.agentUpdateNow.label = "Checking..."
+			agentUpdate.check(self.userPath, true, function(ok, err)
+				local info = agentUpdate.available(self.userPath)
+				local st = agentUpdate.state(self.userPath)
+				if not ok then
+					controls.agentUpdateNow.label = "Failed"
+					controls.agentUpdateNow.tooltipText = "Could not reach GitHub: " .. tostring(err)
+				elseif info then
+					controls.agentUpdateNow.label = "v" .. info.version .. " out"
+				elseif st.latest and agentUpdate.compare(st.latest, agentUpdate.version()) > 0 then
+					controls.agentUpdateNow.label = "v" .. st.latest .. " (hidden)"
+					controls.agentUpdateNow.tooltipText = "You skipped or snoozed this version. Run tools\\update.ps1 to update anyway."
+				else
+					controls.agentUpdateNow.label = "Up to date"
+				end
+			end)
+		end)
 	end
 
 	nextRow()
@@ -1311,6 +1340,9 @@ function main:OpenOptionsPopup(savedState)
 		end
 		if controls.tradeSessionId then
 			LoadModule("Agent/Settings").set(self.userPath, "POESESSID", controls.tradeSessionId.buf)
+		end
+		if controls.agentUpdateCheck then
+			LoadModule("Agent/Update").setEnabled(self.userPath, controls.agentUpdateCheck.state)
 		end
 		if saveAgentProfile then
 			saveAgentProfile()
