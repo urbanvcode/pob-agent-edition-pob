@@ -65,6 +65,12 @@ function launch:OnInit()
 		self.installedMode = true
 		installedFile:close()
 	end
+	-- Agent Edition: AI-controllable build (see Agent/LiveServer.lua)
+	local agentFile = io.open("Agent/LiveServer.lua", "r")
+	if agentFile and not HEADLESS then
+		agentFile:close()
+		self.agentEdition = true
+	end
 	RenderInit("DPI_AWARE")
 	ConPrintf("Loading main script...")
 	local errMsg
@@ -77,6 +83,16 @@ function launch:OnInit()
 		errMsg = PCall(self.main.Init, self.main)
 		if errMsg then
 			self:ShowErrMsg("In 'Init': %s", errMsg)
+		end
+	end
+
+	if self.agentEdition and self.main then
+		local errMsg, server = PLoadModule("Agent/LiveServer")
+		if errMsg then
+			ConPrintf("[Agent] failed to load live server: %s", errMsg)
+		else
+			self.agentServer = server
+			PCall(server.Start, server)
 		end
 	end
 
@@ -100,12 +116,21 @@ function launch:CanExit()
 end
 
 function launch:OnExit()
+	if self.agentServer then
+		PCall(self.agentServer.Stop, self.agentServer)
+	end
 	if self.main and self.main.Shutdown then
 		PCall(self.main.Shutdown, self.main)
 	end
 end
 
 function launch:OnFrame()
+	if self.agentServer then
+		local errMsg = PCall(self.agentServer.Poll, self.agentServer)
+		if errMsg then
+			ConPrintf("[Agent] poll error: %s", errMsg)
+		end
+	end
 	if self.main then
 		if self.main.OnFrame then
 			local errMsg = PCall(self.main.OnFrame, self.main)

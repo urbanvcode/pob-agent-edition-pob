@@ -83,7 +83,8 @@ function main:Init()
 	if not ignoreBuild then
 		self:SetMode("BUILD", false, "Unnamed build")
 	end
-	if launch.devMode or (GetScriptPath() == GetRuntimePath() and not launch.installedMode) then
+	-- Agent Edition runs from the repo (dev mode) but shares the normal user folder and builds
+	if (launch.devMode and not launch.agentEdition) or (GetScriptPath() == GetRuntimePath() and not launch.installedMode) then
 		-- If running in dev mode or standalone mode, put user data in the script path
 		self.userPath = GetScriptPath().."/"
 	else

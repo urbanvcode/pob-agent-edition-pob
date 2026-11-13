@@ -1,4 +1,6 @@
 #@
+-- Agent Edition: marks headless runs so the live GUI server stays off
+HEADLESS = true
 -- This wrapper allows the program to run headless on any OS (in theory)
 -- It can be run using a standard lua interpreter, although LuaJIT is preferable
 
