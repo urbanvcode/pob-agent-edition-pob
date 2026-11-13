@@ -1,7 +1,7 @@
 -- Agent Edition tool handlers: the calls agent-mcp's tools are built on.
 -- Loaded by Core.lua with (handlers, BuildOps, op). Everything here works on
 -- the global `build`, in the live window and in the headless runner alike.
-local handlers, Ops, op = ...
+local handlers, Ops, op, DIR = ...
 
 local t_insert = table.insert
 local m_floor, m_min, m_max = math.floor, math.min, math.max
@@ -685,6 +685,10 @@ local function restore(s)
 		b.configTab:RestoreUndoState(s.config)
 		b.configTab.enemyLevel = s.enemyLevel
 		b.configTab:BuildModList()
+		-- Building the mod list can write default values back (boss presets do): keep the input exactly as captured.
+		local input = b.configTab.input
+		for k in pairs(input) do if s.config.input[k] == nil then input[k] = nil end end
+		for k, v in pairs(s.config.input) do input[k] = v end
 	end)
 	b.characterLevel = s.level
 	b.characterLevelAutoMode = s.levelAuto
@@ -939,3 +943,9 @@ handlers.config_search = function(params)
 	end
 	return { ok = true, options = out }
 end
+
+-- Support gems, boss check, jewels, item affixes, notes
+loadfile(DIR .. 'Advice.lua')(handlers, Ops, {
+	num = num, dpsOf = dpsOf, pctChange = pctChange, strip = strip, recalc = recalc, mainOutput = mainOutput,
+	assumptions = assumptions, mainSkillName = mainSkillName, capture = capture, restore = restore,
+})

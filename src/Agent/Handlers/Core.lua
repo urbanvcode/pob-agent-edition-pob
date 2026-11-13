@@ -239,6 +239,7 @@ handlers.set_socket_group_enabled = op(BuildOps.set_socket_group_enabled, 'resul
 local TEST_FIELDS = {
   'FullDPS', 'CombinedDPS', 'TotalDPS', 'TotalDotDPS', 'TotalEHP', 'Life', 'EnergyShield', 'Mana', 'ManaUnreserved',
   'FireResist', 'ColdResist', 'LightningResist', 'ChaosResist', 'EffectiveSpellSuppressionChance',
+  'MissingFireResist', 'MissingColdResist', 'MissingLightningResist', 'MissingChaosResist',
   'EvadeChance', 'BlockChance', 'Armour', 'Evasion', 'PhysicalMaximumHitTaken', 'ChaosMaximumHitTaken',
   'EffectiveMovementSpeedMod', 'Str', 'Dex', 'Int', 'ReqStr', 'ReqDex', 'ReqInt',
 }
@@ -354,6 +355,6 @@ handlers.get_capabilities = function()
 end
 
 -- Agent Edition tools (summary, diagnose, edits, what-if, suggestions)
-loadfile(ADAPTER_DIR .. 'Tools.lua')(handlers, BuildOps, op)
+loadfile(ADAPTER_DIR .. 'Tools.lua')(handlers, BuildOps, op, ADAPTER_DIR)
 
 return handlers, BuildOps
