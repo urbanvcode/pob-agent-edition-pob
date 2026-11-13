@@ -250,11 +250,15 @@ function main:Init()
 	end
 	self.controls.versionLabel = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {148, -2, 0, 16}, "")
 	self.controls.versionLabel.label = function()
+		if launch.agentVersion then
+			-- Agent Edition: our version, then the official PoB version it is based on
+			return "^8v" .. launch.agentVersion .. " (PoB " .. launch.versionNumber .. ")"
+		end
 		return "^8" .. (launch.versionBranch == "beta" and "Beta: " or "Version: ") .. launch.versionNumber .. (launch.versionBranch == "dev" and " (Dev)" or "")
 	end
 	self.controls.devMode = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {0, -26, 0, 20}, function()
 		if not launch.agentEdition then return colorCodes.NEGATIVE.."Dev Mode" end
-		return "^x4FD1C2Agent Edition" .. (launch.agentVersion and (" v" .. launch.agentVersion) or "")
+		return "^x4FD1C2Agent Edition"
 	end)
 	self.controls.devMode.shown = function()
 		return launch.devMode
