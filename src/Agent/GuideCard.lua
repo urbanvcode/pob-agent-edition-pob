@@ -1,7 +1,7 @@
 -- Agent Edition: Overview "Guide" card (Stage 3).
 -- Shows how close the open build is to the guide stage it follows: passives,
 -- gems and key items matched, DPS/EHP against the guide, and the next 3 steps.
--- agent-mcp's guide_compare / guide_next_steps write
+-- agent-mcp's guide tool (compare / next steps) writes
 -- <user folder>/AgentCache/guide/card.json; this card only reads it
 -- (re-read every few seconds, so a new comparison shows up at once).
 local Viz = LoadModule("Agent/Viz")

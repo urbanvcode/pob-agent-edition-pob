@@ -117,7 +117,7 @@ function Progress.draw(tab, x, y, w, h)
 				local p = timeline[k]
 				tt:AddLine(14, string.format("^8%s  ^7%s", stamp(p.at), r.key == "level" and tostring(p.level) or Viz.num(tonumber(p[r.key]) or 0)))
 			end
-			if from > 1 then tt:AddLine(14, "^8(" .. (from - 1) .. " earlier syncs; ask your AI for character_history)") end
+			if from > 1 then tt:AddLine(14, "^8(" .. (from - 1) .. " earlier syncs; ask your AI for the full history)") end
 		end, nil)
 	end
 	local sy = cy + #rows * rowH + 2

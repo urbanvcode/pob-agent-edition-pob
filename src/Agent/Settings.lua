@@ -44,7 +44,7 @@ function AgentSettings.set(userPath, key, value)
 end
 
 -- Player profile -------------------------------------------------------------
--- Stored under "profile". Every AI client reads it first (profile_get) and
+-- Stored under "profile". Every AI client reads it first (the profile tool) and
 -- adapts: trade vs SSF advice, league, budget, goals and explanation depth.
 
 AgentSettings.PLAY_MODES = {

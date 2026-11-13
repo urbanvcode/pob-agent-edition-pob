@@ -1,5 +1,5 @@
 -- Agent Edition: character sync from inside PoB (Guide tab button, optional auto-sync).
--- Same result as agent-mcp's character_sync (Stage 2), without an AI app:
+-- Same result as agent-mcp's character tool (Stage 2), without an AI app:
 --   1. the character list, the items and the passive tree from the player's public
 --      pathofexile.com profile (the same 3 requests PoB's own Import tab makes),
 --      at least 2 s apart, never more than one sync a minute, and a 10-minute pause
