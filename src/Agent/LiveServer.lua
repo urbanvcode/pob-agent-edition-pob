@@ -190,10 +190,28 @@ function LiveServer:AddLiveHandlers(handlers)
 	handlers.set_view = function(params)
 		if not buildLoaded() then return { ok = false, error = "no build open in PoB" } end
 		local view = tostring(params.view or ""):upper()
-		local valid = { OVERVIEW = true, ATLAS = true, TREE = true, SKILLS = true, ITEMS = true, CALCS = true, CONFIG = true, NOTES = true, IMPORT = true, PARTY = true, COMPARE = true }
+		local valid = { OVERVIEW = true, ATLAS = true, TREE = true, SKILLS = true, ITEMS = true, CALCS = true, CONFIG = true, NOTES = true, IMPORT = true, PARTY = true, COMPARE = true, GUIDE = true }
 		if not valid[view] then return { ok = false, error = "unknown view: " .. view } end
 		build.viewMode = view
 		return { ok = true, view = view }
+	end
+
+	-- Guide tab: show it and press Analyse (same as the button).
+	handlers.guide_tab = function(params)
+		if not buildLoaded() or not build.guideTab then return { ok = false, error = "no build open in PoB" } end
+		build.viewMode = "GUIDE"
+		local tab = build.guideTab
+		if params and params.stage then
+			if not tab.scannedAt then tab:ScanGuides() tab:RefreshStages() end
+			for i, s in ipairs(tab.stages or {}) do
+				if tostring(s.index) == tostring(params.stage) or s.title:lower() == tostring(params.stage):lower() then
+					tab.controls.stageSelect.selIndex = i + 1
+					tab:SelectStage(i + 1)
+				end
+			end
+		end
+		if params and params.analyse then tab:RequestAnalysis() end
+		return { ok = true }
 	end
 
 	-- Open the Options popup (e.g. so the player can edit the Agent profile).

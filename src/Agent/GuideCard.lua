@@ -52,7 +52,7 @@ function GuideCard.draw(tab, x, y, w, h)
 		if not mine then note = "for " .. tostring(data.build) end
 	end
 	local title = (data and data.stage and mine) and ("Guide - " .. data.stage) or "Guide"
-	local cx, cy, cw, ch = tab:Card("cGuide", x, y, w, h, title, note, nil, nil)
+	local cx, cy, cw, ch = tab:Card("cGuide", x, y, w, h, title, note, { "^7Open the Guide tab: the guide over your tree, next steps and Analyse." }, function() tab.build.viewMode = "GUIDE" end)
 	if not data or not mine then
 		Viz.text(cx, cy, "LEFT", 14, "VAR", "Follow a build guide stage by stage.", col.text)
 		Viz.text(cx, cy + 22, "LEFT", 13, "VAR", "Paste the guide's PoB link (pobb.in, poe.ninja,", col.muted)
@@ -135,7 +135,7 @@ function GuideCard.draw(tab, x, y, w, h)
 		end)
 	end
 	local at = tostring(data.at or ""):sub(1, 16):gsub("T", " ")
-	Viz.text(cx, y + h - 20, "LEFT", 11, "VAR", Viz.fit(11, "VAR", "Stage " .. tostring(data.stageIndex or "?") .. "/" .. tostring(data.stages or "?") .. (data.detected and (", closest: " .. data.detected) or "") .. "  |  " .. at .. " UTC", cw), col.muted)
+	Viz.text(cx, y + h - 20, "LEFT", 11, "VAR", Viz.fit(11, "VAR", (data.focus and ("Focus: " .. data.focus .. "  |  ") or "") .. "Stage " .. tostring(data.stageIndex or "?") .. "/" .. tostring(data.stages or "?") .. (data.levelling and " (levelling)" or "") .. "  |  " .. at .. " UTC", cw), col.muted)
 end
 
 return GuideCard

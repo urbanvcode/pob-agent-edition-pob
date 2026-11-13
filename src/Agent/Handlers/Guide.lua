@@ -5,6 +5,7 @@
 local handlers, Ops = ...
 
 local t_insert, t_sort = table.insert, table.sort
+local priorities, rankPlan, detectStage -- defined further down
 local m_min, m_max, m_abs = math.min, math.max, math.abs
 
 local function num(v)
@@ -30,6 +31,9 @@ end
 local function stats()
 	return handlers.key_stats({}).stats
 end
+
+-- Character level where maps start (end of the campaign); below it the character is levelling.
+local MAPS_LEVEL = 68
 
 -- Gear slots a guide stage is compared on (jewels are added per socket).
 local GEAR = { 'Weapon 1', 'Weapon 2', 'Helmet', 'Body Armour', 'Gloves', 'Boots', 'Amulet', 'Ring 1', 'Ring 2', 'Belt',
@@ -94,6 +98,26 @@ local function countedNode(node)
 	return node and node.type ~= 'ClassStart' and node.type ~= 'AscendClassStart'
 end
 
+-- Levelling stages: a title such as "Act 1-3", "Level 30", "Leveling", or a small tree.
+local LEVELLING_WORDS = { 'act', 'acts', 'lvl', 'level', 'levels', 'leveling', 'levelling', 'campaign' }
+local LEVELLING_POINTS = 70
+local function levellingTitle(title)
+	local t = ' ' .. (tostring(title or ''):lower():gsub('[^%w]+', ' ')) .. ' '
+	for _, w in ipairs(LEVELLING_WORDS) do
+		if t:find(' ' .. w .. ' ', 1, true) then return true end
+	end
+	return t:find(' lvl?%d') ~= nil
+end
+
+-- Character level a gem needs at gem level 1 (nil when PoB does not know the gem).
+local function gemReq(name)
+	local key = tostring(name or ''):lower()
+	local id = data.gemForBaseName[key] or data.gemForBaseName[key .. ' support']
+	local gem = id and data.gems[id]
+	local levels = gem and gem.grantedEffect and gem.grantedEffect.levels
+	return levels and levels[1] and levels[1].levelRequirement or nil
+end
+
 -- Light data of one stage, read without switching to it (for stage detection).
 local function lightStage(stage)
 	local spec = build.treeTab.specList[stage.index]
@@ -112,16 +136,21 @@ local function lightStage(stage)
 		local item = entry and entry.selItemId and build.itemsTab.items[entry.selItemId]
 		if item then itemNames[slot] = strip(item.name) end
 	end
-	local gems = {}
+	local gems, skills = {}, {}
 	local skillSet = stage.skillSet and build.skillsTab.skillSets[stage.skillSet]
 	for _, g in ipairs(skillSet and skillSet.socketGroupList or {}) do
 		if g.enabled ~= false then
 			for _, gem in ipairs(g.gemList or {}) do
-				if gem.enabled ~= false and gem.nameSpec and gem.nameSpec ~= '' then t_insert(gems, gem.nameSpec) end
+				if gem.enabled ~= false and gem.nameSpec and gem.nameSpec ~= '' then
+					t_insert(gems, gem.nameSpec)
+					local effect = gem.gemData and gem.gemData.grantedEffect
+					if effect and not effect.support then t_insert(skills, { name = gem.nameSpec, req = gemReq(gem.nameSpec) }) end
+				end
 			end
 		end
 	end
-	return { index = stage.index, title = stage.title, points = points, nodes = nodes, items = itemNames, gems = gems }
+	return { index = stage.index, title = stage.title, points = points, nodes = nodes, items = itemNames, gems = gems,
+		skills = skills, levelling = levellingTitle(stage.title) or points < LEVELLING_POINTS }
 end
 
 local function pointsAtLevel()
@@ -217,7 +246,7 @@ handlers.guide_data = function(params)
 	end
 	t_sort(nodes)
 	local notesTab = build.notesTab
-	local notes = notesTab and (notesTab.controls and notesTab.controls.edit and notesTab.controls.edit.buf or notesTab.lastContent) or ''
+	local notes = notesTab and (notesTab.controls and notesTab.controls.edit and notesTab.controls.edit.buf or notesTab.lastContent) or build.notesText or ''
 	if type(notes) ~= 'string' then notes = '' end
 	return { ok = true, index = stage.index, title = stage.title, stages = #list,
 		className = spec.curClassName, ascendancy = spec.curAscendClassName, level = tonumber(build.characterLevel),
@@ -291,7 +320,7 @@ local function nodeName(node) return node.dn or node.name or tostring(node.id) e
 
 -- Tree: missing nodes ordered into a path (nearest notable first), each step
 -- simulated on top of the previous ones (that is how they would be taken).
-local function treeGap(guide, skip, simulate, maxSteps)
+local function treeGap(guide, skip, simulate, maxSteps, levelling)
 	local spec = build.spec
 	local nodes = spec.nodes
 	local out = { steps = {}, masteries = {}, extra = {}, extraPoints = 0, missingPoints = 0, notFound = 0, otherAscendancy = 0, have = 0, total = 0 }
@@ -435,6 +464,8 @@ local function treeGap(guide, skip, simulate, maxSteps)
 	end
 
 	-- Simulate the path step by step on a copy of the tree, then put it back.
+	-- Levelling: the guide's next tree takes over, so extra passives are no respec.
+	if levelling then out.respecIgnored = true end
 	local limit = maxSteps or 40
 	local extraIds = {}
 	for _, e in ipairs(out.extra) do extraIds[e.id] = true end
@@ -482,7 +513,7 @@ local function treeGap(guide, skip, simulate, maxSteps)
 				step.gain = gain(before, now)
 				before = now
 			end
-			if #out.extra > 0 then
+			if #out.extra > 0 and not levelling then
 				for _, e in ipairs(out.extra) do
 					local node = nodes[e.id]
 					if node and node.alloc then spec:DeallocNode(node) end
@@ -504,7 +535,7 @@ local function treeGap(guide, skip, simulate, maxSteps)
 end
 
 -- Gems: guide skill groups matched to the player's by their active skill.
-local function gemGap(guide, skip, simulate)
+local function gemGap(guide, skip, simulate, level)
 	local mine = skillGroups()
 	local out = { steps = {}, have = 0, total = 0, groups = {} }
 	local used = {}
@@ -558,21 +589,36 @@ local function gemGap(guide, skip, simulate)
 				entry.absent = g == nil
 				if g == nil then entry.gems = wanted end
 				t_insert(out.groups, entry)
+				-- Gems the character is too low for come later (levelling).
+				for _, gem in ipairs(entry.missing) do
+					local req = gemReq(gem.name)
+					if req and req > level then gem.later = req end
+				end
+				if g == nil then
+					for _, gem in ipairs(wanted) do
+						local req = gemReq(gem.name)
+						if req and req > level and (not entry.later or req > entry.later) then entry.later = req end
+					end
+				end
 				if simulate then
-					if g == nil then
+					if g == nil and entry.later then
+						-- not usable yet: no simulation
+					elseif g == nil then
 						local gems = {}
 						for _, gem in ipairs(wanted) do t_insert(gems, { name = gem.name, level = gem.level, quality = gem.quality }) end
 						entry.gain = sim({ { op = 'add_group', label = gg.label, slot = gg.slot, gems = gems } })
 					else
 						-- Each missing gem alone: added, replacing a support the guide does not use when the group is full.
 						for k, gem in ipairs(entry.missing) do
-							local ops = { { op = 'add_gem', group = g.index, name = gem.name, level = gem.level, quality = gem.quality } }
-							local wrong = entry.wrong[k]
-							if wrong and entry.playerCount >= entry.guideCount then
-								t_insert(ops, { op = 'gem', group = g.index, gem = wrong.index, enabled = false })
-								gem.replaces = wrong.name
+							if not gem.later then
+								local ops = { { op = 'add_gem', group = g.index, name = gem.name, level = gem.level, quality = gem.quality } }
+								local wrong = entry.wrong[k]
+								if wrong and entry.playerCount >= entry.guideCount then
+									t_insert(ops, { op = 'gem', group = g.index, gem = wrong.index, enabled = false })
+									gem.replaces = wrong.name
+								end
+								gem.gain = sim(ops)
 							end
-							gem.gain = sim(ops)
 						end
 						if #entry.levels > 0 then
 							local ops = {}
@@ -595,7 +641,7 @@ local function gemGap(guide, skip, simulate)
 end
 
 -- Items: every guide slot simulated in the player's build.
-local function itemGap(guide, skip, simulate)
+local function itemGap(guide, skip, simulate, levelling)
 	local mine = {}
 	for _, it in ipairs(gearItems()) do mine[it.slot] = it end
 	local out = { slots = {}, have = 0, total = 0 }
@@ -612,14 +658,17 @@ local function itemGap(guide, skip, simulate)
 			entry.status = same and 'match' or 'missing'
 		end
 		if entry.status ~= 'match' and skipped(skip, gi.slot, gi.name, p and p.name) then entry.status = 'accepted' end
+		-- Levelling: links and cheap uniques matter, the guide's rares do not.
+		if levelling and (entry.status == 'rare' or entry.status == 'missing rare') then entry.status = 'levelling rare' end
 		if isJewel and not build.spec.allocNodes[tonumber(gi.slot:match('(%d+)'))] then entry.status = 'socket not allocated' end
-		if not isJewel and not gi.slot:match('^Flask') then out.total = out.total + 1 end
-		if simulate and entry.status ~= 'match' and entry.status ~= 'accepted' and entry.status ~= 'socket not allocated' then
+		local counted = not isJewel and not gi.slot:match('^Flask') and entry.status ~= 'levelling rare'
+		if counted then out.total = out.total + 1 end
+		if simulate and entry.status ~= 'match' and entry.status ~= 'accepted' and entry.status ~= 'socket not allocated' and entry.status ~= 'levelling rare' then
 			entry.gain = isJewel and jewelSim(gi.slot, gi.raw) or sim({ { op = 'equip', slot = gi.slot, text = gi.raw } })
 		end
 		-- A rare counts as matched when the guide's rare would not improve the build.
 		if entry.status == 'rare' and entry.gain and entry.gain.dpsPct < 2 and entry.gain.ehpPct < 2 then entry.status = 'rare ok' end
-		if not isJewel and not gi.slot:match('^Flask') and (entry.status == 'match' or entry.status == 'accepted' or entry.status == 'rare ok') then out.have = out.have + 1 end
+		if counted and (entry.status == 'match' or entry.status == 'accepted' or entry.status == 'rare ok') then out.have = out.have + 1 end
 		t_insert(out.slots, entry)
 	end
 	return out
@@ -647,7 +696,238 @@ local function configGap(guide)
 	return diff, values
 end
 
--- params: { guide = guide_data result, skip = {names}, simulate = bool, maxSteps }
+-- Priorities -----------------------------------------------------------------------
+-- What the character lacks most decides how gains are weighed:
+-- 1. uncapped elemental resistances come first (the cap is a fact of the game);
+-- 2. otherwise whichever of defence (EHP, weakest max hit) or damage is further
+--    behind the guide stage gets the bigger weight; hardcore leans to defence.
+local function weakestHit(s)
+	local m
+	for _, t in ipairs({ 'Physical', 'Fire', 'Cold', 'Lightning', 'Chaos' }) do
+		local v = s and s[t .. 'MaximumHitTaken']
+		if v and v > 0 and (not m or v < m) then m = v end
+	end
+	return m or 0
+end
+
+priorities = function(res, guide, opts)
+	local me, g = res.stats or {}, guide.stats or {}
+	local f = { reasons = {}, resMissing = {} }
+	local ok, d = pcall(handlers.diagnose, {})
+	local diag = ok and d and d.diagnosis
+	for _, k in ipairs({ 'Fire', 'Cold', 'Lightning' }) do
+		local r = diag and diag.resist and diag.resist[k]
+		if r and r.value and r.max and r.value < r.max then
+			f.resMissing[k:lower()] = r.max - r.value
+			t_insert(f.reasons, string.format('%s resistance %d%% of %d%%', k, r.value, r.max))
+		end
+	end
+	local function ratio(a, b) return b > 0 and a / b or 1 end
+	f.dpsRatio = ratio(dpsOf(me), dpsOf(g))
+	f.ehpRatio = ratio(me.TotalEHP or 0, g.TotalEHP or 0)
+	f.hitRatio = ratio(weakestHit(me), weakestHit(g))
+	local def = m_min(f.ehpRatio, f.hitRatio)
+	local hc = opts.hardcore
+	local function pct(v) return math.floor(v * 100 + 0.5) end
+	if next(f.resMissing) then
+		f.kind, f.title = 'resists', 'Cap your resistances first'
+	elseif def < f.dpsRatio - 0.1 or (hc and def < 0.9 and def <= f.dpsRatio) then
+		f.kind, f.title = 'defence', 'Defence is behind'
+	elseif f.dpsRatio < def - 0.1 then
+		f.kind, f.title = 'damage', 'Damage is behind'
+	else
+		f.kind, f.title = 'balanced', 'Damage and defence are even'
+	end
+	t_insert(f.reasons, string.format('vs the guide stage: DPS %d%%, EHP %d%%, weakest max hit %d%%', pct(f.dpsRatio), pct(f.ehpRatio), pct(f.hitRatio)))
+	if f.kind == 'resists' or f.kind == 'defence' then f.wDps, f.wEhp = 1, hc and 4 or 3
+	elseif f.kind == 'damage' then f.wDps, f.wEhp = 2, hc and 2 or 1
+	else f.wDps, f.wEhp = 1, hc and 2 or 1 end
+	if hc then t_insert(f.reasons, 'hardcore: defence counts more') end
+	return f
+end
+
+-- One number per gain: weighted DPS and EHP percent, plus 2 per point of a
+-- resistance that is still under its cap (minus 2 per point lost).
+local function score(gn, f)
+	if not gn or gn.error then return nil end
+	local v = f.wDps * (gn.dpsPct or 0) + f.wEhp * (gn.ehpPct or 0)
+	for k, miss in pairs(f.resMissing or {}) do
+		local add = gn.res and gn.res[k] or 0
+		if add > 0 then v = v + 2 * m_min(add, miss) elseif add < 0 then v = v + 2 * add end
+	end
+	gn.score = v
+	return v
+end
+
+local function urlencode(str)
+	return (tostring(str):gsub('[^%w%-_%.~]', function(c) return string.format('%%%02X', string.byte(c)) end))
+end
+
+local function jsonString(str)
+	return '"' .. tostring(str):gsub('\\', '\\\\'):gsub('"', '\\"') .. '"'
+end
+
+-- An instant-buyout search on pathofexile.com, opened by the player (no request is made here).
+local function tradeLink(league, name, base)
+	if not league or league == '' then return nil end
+	local q = '{"query":{"status":{"option":"securable"},"name":' .. jsonString(name) .. (base and (',"type":' .. jsonString(base)) or '') .. '},"sort":{"price":"asc"}}'
+	return 'https://www.pathofexile.com/trade/search/' .. urlencode(league) .. '?q=' .. urlencode(q)
+end
+
+-- Ranked next steps (no prices: agent-mcp adds those). Passives keep the path order
+-- (a step comes after the step it builds on); "rush" is the best target 3 or more
+-- points away, counting the points of its path.
+rankPlan = function(res, f, params)
+	local steps = res.tree.steps or {}
+	local byIdx = {}
+	for i, st in ipairs(steps) do
+		st.idx = i
+		byIdx[i] = st
+		score(st.gain, f)
+	end
+	local function chainOf(st)
+		local list, seen = {}, {}
+		local cur = st
+		while cur and not seen[cur.idx] do
+			t_insert(list, 1, cur)
+			seen[cur.idx] = true
+			cur = cur.after and byIdx[cur.after] or nil
+		end
+		return list
+	end
+	local plan = { passives = {}, other = {}, free = (res.pointsAtLevel or 0) - (res.points or 0) }
+	local best
+	for _, st in ipairs(steps) do
+		if st.gain and (st.gain.score or 0) > 0 then
+			local chain = chainOf(st)
+			local pts, sc = 0, 0
+			for _, c in ipairs(chain) do
+				pts = pts + (c.points or 0)
+				sc = sc + (c.gain and c.gain.score or 0)
+			end
+			local rate = pts > 0 and sc / pts or 0
+			if pts >= 3 and (not best or rate > best.rate) then best = { step = st, points = pts, rate = rate, chain = chain } end
+		end
+	end
+	if best then
+		local dps, ehp = 0, 0
+		for _, c in ipairs(best.chain) do
+			dps = dps + (c.gain and c.gain.dpsPct or 0)
+			ehp = ehp + (c.gain and c.gain.ehpPct or 0)
+		end
+		plan.rush = { target = best.step.target, points = best.points, dpsPct = dps, ehpPct = ehp, idx = best.step.idx }
+	end
+	local order = {}
+	for _, st in ipairs(steps) do
+		if st.gain and (st.gain.score or 0) > 0 and not st.skippedSim then t_insert(order, st) end
+	end
+	t_sort(order, function(a, b) return a.gain.score / m_max(1, a.points or 1) > b.gain.score / m_max(1, b.points or 1) end)
+	local taken = {}
+	for _, st in ipairs(order) do
+		for _, c in ipairs(chainOf(st)) do
+			if not taken[c.idx] then
+				taken[c.idx] = true
+				t_insert(plan.passives, { idx = c.idx, text = table.concat(c.names or {}, ', '), target = c.target, points = c.points, gain = c.gain, kind = c.kind, nodes = c.nodes })
+			end
+		end
+	end
+	local league = params.league
+	for _, g in ipairs(res.gems.groups or {}) do
+		if g.absent and g.gain and not g.later and score(g.gain, f) and g.gain.score > 0 then
+			local names = {}
+			for _, x in ipairs(g.gems or {}) do t_insert(names, x.name) end
+			t_insert(plan.other, { kind = 'skill group', text = 'New group: ' .. table.concat(names, ' + '), gain = g.gain, view = 'SKILLS' })
+		end
+		for _, x in ipairs(g.missing or {}) do
+			if x.gain and not x.later and score(x.gain, f) and x.gain.score > 0 then
+				t_insert(plan.other, { kind = 'gem', text = x.name .. ' in ' .. tostring(g.skill) .. (x.replaces and (' (instead of ' .. x.replaces .. ')') or ''), gain = x.gain, view = 'SKILLS', name = x.name })
+			end
+		end
+		if g.levelGain and score(g.levelGain, f) and g.levelGain.score > 0 then
+			local names = {}
+			for _, l in ipairs(g.levels or {}) do t_insert(names, l.name .. ' to ' .. tostring(l.to) .. '/' .. tostring(l.qTo)) end
+			t_insert(plan.other, { kind = 'gem levels', text = 'Level ' .. table.concat(names, ', '), gain = g.levelGain, view = 'SKILLS' })
+		end
+	end
+	for _, it in ipairs(res.items.slots or {}) do
+		if it.gain and score(it.gain, f) and it.gain.score > 0 then
+			local unique = it.rarity == 'UNIQUE'
+			local short = tostring(it.guide or ''):match('^([^,]+)') or it.guide
+			t_insert(plan.other, { kind = it.slot:match('^Jewel') and 'jewel' or 'item', slot = it.slot,
+				text = it.slot .. ': ' .. (unique and short or ('rare ' .. tostring(it.base or ''))), gain = it.gain, view = 'ITEMS',
+				unique = unique, name = unique and short or nil, base = it.base,
+				link = unique and params.playMode ~= 'ssf' and tradeLink(league, short, it.base) or nil })
+		end
+	end
+	t_sort(plan.other, function(a, b) return a.gain.score > b.gain.score end)
+	return plan
+end
+
+-- Stage detection --------------------------------------------------------------------
+-- A levelling character (below maps) is matched to the levelling stages by passive
+-- points; others by how alike tree, items and gems are.
+detectStage = function(stages, me, level, pAtLevel)
+	local mine, myGems = {}, {}
+	for _, id in ipairs(me.nodes or {}) do mine[id] = true end
+	for _, gname in ipairs(me.gems or {}) do myGems[lower(gname)] = true end
+	local levellingStages = {}
+	for _, st in ipairs(stages) do if st.levelling then t_insert(levellingStages, st) end end
+	if level < MAPS_LEVEL and #levellingStages > 0 then
+		t_sort(levellingStages, function(a, b) return a.points < b.points end)
+		local pick = levellingStages[1]
+		for _, st in ipairs(levellingStages) do if st.points <= (me.points or 0) + 2 then pick = st end end
+		return { index = pick.index, levelling = true,
+			reason = string.format('levelling: %d passive points, nearest levelling stage', me.points or 0) }
+	end
+	local best
+	for _, st in ipairs(stages) do
+		local both, union = 0, 0
+		local theirs = {}
+		for _, id in ipairs(st.nodes or {}) do
+			theirs[id] = true
+			if mine[id] then both = both + 1 end
+		end
+		for _ in pairs(mine) do union = union + 1 end
+		for id in pairs(theirs) do if not mine[id] then union = union + 1 end end
+		local tree = both / m_max(1, union)
+		local slots, same = 0, 0
+		for slot, name in pairs(st.items or {}) do
+			slots = slots + 1
+			if me.items and me.items[slot] and lower(me.items[slot]) == lower(name) then same = same + 1 end
+		end
+		local items = same / m_max(1, slots)
+		local gHave = 0
+		for _, gname in ipairs(st.gems or {}) do if myGems[lower(gname)] then gHave = gHave + 1 end end
+		local gems = gHave / m_max(1, #(st.gems or {}))
+		local sc = 0.6 * tree + 0.2 * items + 0.2 * gems
+		if (st.points or 0) > pAtLevel + 3 then sc = sc - 0.15 end
+		if not best or sc > best.score then best = { index = st.index, score = sc, tree = tree, items = items, gems = gems } end
+	end
+	best.reason = string.format('tree %d%%, items %d%%, gems %d%% alike', math.floor(best.tree * 100 + 0.5), math.floor(best.items * 100 + 0.5), math.floor(best.gems * 100 + 0.5))
+	best.levelling = level < MAPS_LEVEL
+	return best
+end
+
+-- params: { stages = guide_stages{all}.stages, me = guide_stages().stages[1], level, pointsAtLevel }
+handlers.guide_detect = function(params)
+	if type(params.stages) ~= 'table' or #params.stages == 0 then return { ok = false, error = 'stages required' } end
+	local res = detectStage(params.stages, type(params.me) == 'table' and params.me or {}, tonumber(params.level) or 1, tonumber(params.pointsAtLevel) or 0)
+	res.ok = true
+	return res
+end
+
+-- The Guide tab reads the guide from a CompareEntry (a second build PoB calculates
+-- on its own) and runs these same handlers on it.
+handlers._withBuild = function(other, fn, ...)
+	local saved = build
+	build = other
+	local ok, res = pcall(fn, ...)
+	build = saved
+	if not ok then return { ok = false, error = tostring(res) } end
+	return res
+end
+
+-- params: { guide = guide_data result, skip = {names}, simulate = bool, maxSteps, levelling, hardcore, league, playMode }
 handlers.guide_gap = function(params)
 	local guide = params.guide
 	if type(guide) ~= 'table' or type(guide.nodes) ~= 'table' then return { ok = false, error = 'guide data missing (guide_data result expected)' } end
@@ -660,9 +940,12 @@ handlers.guide_gap = function(params)
 	local res = { ok = true, name = build.buildName, level = tonumber(build.characterLevel), className = spec.curClassName,
 		ascendancy = spec.curAscendClassName, points = select(1, spec:CountAllocNodes()), pointsAtLevel = pointsAtLevel(),
 		stats = now, guideStats = guide.stats, mainSkill = handlers.key_stats({}).mainSkill }
-	res.tree = treeGap(guide, skip, simulate, tonumber(params.maxSteps))
-	res.gems = gemGap(guide, skip, simulate)
-	res.items = itemGap(guide, skip, simulate)
+	-- Levelling: the stage is a levelling one, or the character has not reached maps yet.
+	local levelling = params.levelling == true or (tonumber(build.characterLevel) or 1) < MAPS_LEVEL
+	res.levelling = levelling
+	res.tree = treeGap(guide, skip, simulate, tonumber(params.maxSteps), levelling)
+	res.gems = gemGap(guide, skip, simulate, tonumber(build.characterLevel) or 1)
+	res.items = itemGap(guide, skip, simulate, levelling)
 	local configDiff, configValues = configGap(guide)
 	res.config = configDiff
 
@@ -676,10 +959,12 @@ handlers.guide_gap = function(params)
 		end
 		for _, g in ipairs(res.gems.groups) do
 			if g.group then
-				for _, gem in ipairs(g.missing) do t_insert(gemOps, { op = 'add_gem', group = g.group, name = gem.name, level = gem.level, quality = gem.quality }) end
+				for _, gem in ipairs(g.missing) do
+					if not gem.later then t_insert(gemOps, { op = 'add_gem', group = g.group, name = gem.name, level = gem.level, quality = gem.quality }) end
+				end
 				for _, w in ipairs(g.wrong) do t_insert(gemOps, { op = 'gem', group = g.group, gem = w.index, enabled = false }) end
 				for _, lv in ipairs(g.levelOps or {}) do t_insert(gemOps, lv) end
-			elseif g.gems then
+			elseif g.gems and not g.later then
 				local gems = {}
 				for _, gem in ipairs(g.gems) do t_insert(gems, { name = gem.name, level = gem.level, quality = gem.quality }) end
 				t_insert(gemOps, { op = 'add_group', slot = g.slot, gems = gems })
@@ -692,7 +977,7 @@ handlers.guide_gap = function(params)
 		if #nodesInOrder > 0 then t_insert(treeOps, { op = 'alloc', nodes = nodesInOrder }) end
 		local extraIds = {}
 		for _, e in ipairs(res.tree.extra or {}) do t_insert(extraIds, e.id) end
-		if #extraIds > 0 then t_insert(treeOps, { op = 'dealloc', nodes = extraIds }) end
+		if #extraIds > 0 and not levelling then t_insert(treeOps, { op = 'dealloc', nodes = extraIds }) end
 		for _, step in ipairs(res.tree.steps or {}) do
 			if step.mastery then t_insert(treeOps, { op = 'mastery', node = step.mastery.id, effect = step.mastery.effect }) end
 		end
@@ -703,5 +988,7 @@ handlers.guide_gap = function(params)
 		explain.all = sim(all)
 		res.explain = explain
 	end
+	res.focus = priorities(res, guide, { hardcore = params.hardcore == true })
+	res.plan = rankPlan(res, res.focus, params)
 	return res
 end

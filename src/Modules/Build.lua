@@ -478,9 +478,15 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 		self.viewMode = "ATLAS"
 	end)
 	self.controls.modeAtlas.locked = function() return self.viewMode == "ATLAS" end
+	-- Agent Edition: guide mode (Classes/GuideTab.lua)
+	self.controls.modeGuide = new("ButtonControl", {"TOPLEFT",self.anchorSideBar,"TOPLEFT"}, {0, 78, 148, 20}, "Guide", function()
+		self.viewMode = "GUIDE"
+	end)
+	self.controls.modeGuide.locked = function() return self.viewMode == "GUIDE" end
+	self.controls.modeGuide.tooltipText = "Follow a build guide: what to take next, simulated in your build."
 	self.controls.modeAtlas.tooltipText = "Atlas passive tree planner (latest league data from GGG)"
 	-- Skills
-	self.controls.mainSkillLabel = new("LabelControl", {"TOPLEFT",self.anchorSideBar,"TOPLEFT"}, {0, 80, 300, 16}, "^7Main Skill:")
+	self.controls.mainSkillLabel = new("LabelControl", {"TOPLEFT",self.anchorSideBar,"TOPLEFT"}, {0, 106, 300, 16}, "^7Main Skill:")
 	self.controls.mainSocketGroup = new("DropDownControl", {"TOPLEFT",self.controls.mainSkillLabel,"BOTTOMLEFT"}, {0, 2, 300, 18}, nil, function(index, value)
 		self.mainSocketGroup = index
 		self.modFlag = true
@@ -615,6 +621,7 @@ function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLin
 	self.calcsTab = new("CalcsTab", self)
 	self.compareTab = new("CompareTab", self)
 	self.overviewTab = new("OverviewTab", self)
+	self.guideTab = new("GuideTab", self)
 	self.atlasTab = new("AtlasTab", self)
 	-- Used for pined calcs panes
 	self.overlayPanes = { }
@@ -1012,7 +1019,7 @@ function buildMode:Save(xml)
 	xml.attrib = {
 		targetVersion = self.targetVersion,
 		-- Agent Edition: stock PoB has no OVERVIEW tab, so save it as TREE
-		viewMode = (self.viewMode == "OVERVIEW" or self.viewMode == "ATLAS") and "TREE" or self.viewMode,
+		viewMode = (self.viewMode == "OVERVIEW" or self.viewMode == "ATLAS" or self.viewMode == "GUIDE") and "TREE" or self.viewMode,
 		level = tostring(self.characterLevel),
 		className = self.spec.curClassName,
 		ascendClassName = self.spec.curAscendClassName,
@@ -1152,6 +1159,8 @@ function buildMode:UpdateSecondaryAscendancyDropdown(forceListUpdate)
 end
 
 function buildMode:OnFrame(inputEvents)
+	-- Agent Edition: character sync requests and auto-sync (Agent/CharacterSync.lua)
+	if main.agentSync then pcall(main.agentSync.tick, self) end
 	-- Stop at drawing the background if the loaded build needs to be converted
 	if not self.targetVersion then
 		main:DrawBackground(main.viewPort)
@@ -1309,6 +1318,8 @@ function buildMode:OnFrame(inputEvents)
 		self.overviewTab:Draw(tabViewPort, inputEvents)
 	elseif self.viewMode == "ATLAS" then
 		self.atlasTab:Draw(tabViewPort, inputEvents)
+	elseif self.viewMode == "GUIDE" then
+		self.guideTab:Draw(tabViewPort, inputEvents)
 	end
 
 	-- Draw overlay panes on top of all tab content (last = topmost)
