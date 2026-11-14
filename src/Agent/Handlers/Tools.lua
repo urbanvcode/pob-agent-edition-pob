@@ -160,7 +160,7 @@ handlers.summary = function()
 	for _, g in ipairs(skills and skills.groups or {}) do
 		local gems = {}
 		for _, gem in ipairs(g.gems) do
-			if gem.name ~= '' then t_insert(gems, { name = gem.name, level = gem.level, quality = gem.quality, enabled = gem.enabled, support = gem.isSupport }) end
+			if gem.name ~= '' then t_insert(gems, { name = gem.name, level = gem.level, quality = gem.quality, socketQuality = gem.socketQuality, enabled = gem.enabled, support = gem.isSupport }) end
 		end
 		if #gems > 0 then t_insert(res.groups, { index = g.index, label = g.label ~= '' and g.label or nil, slot = g.slot, enabled = g.enabled ~= false, fullDps = g.includeInFullDPS == true, gems = gems }) end
 	end

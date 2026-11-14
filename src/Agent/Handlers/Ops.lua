@@ -656,6 +656,8 @@ function M.get_skills()
           name = gem.nameSpec or gem.name or '',
           level = gem.level or 1,
           quality = gem.quality or 0,
+          -- Matching socket colour (3.28+): extra quality PoB adds on top of the gem's own.
+          socketQuality = gem.matchesSocket and data.misc.MatchingSocketQualityBonus or nil,
           qualityId = gem.qualityId or 'Default',
           enabled = gem.enabled ~= false,
           isSupport = gem.skillId and gem.skillId:find('Support') ~= nil or false,
