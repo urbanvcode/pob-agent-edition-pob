@@ -287,7 +287,31 @@ handlers.diagnose = function()
 	}
 	res.mana = { unreserved = num(o.ManaUnreserved), cost = num(o.ManaCost), costPerSecond = num(o.ManaPerSecondCost), lifeCost = num(o.LifeCost) }
 	local manaUnreserved = num(o.ManaUnreserved) or 0
-	if manaUnreserved < 0 then issue('error', 'reservation', 'Mana is over-reserved by ' .. -manaUnreserved)
+	-- Who reserves mana. A character import cannot tell which auras are switched
+	-- on in game, so PoB counts every one; over-reservation is a question for
+	-- the player first, not a finding.
+	local reservers = {}
+	local env = build.calcsTab and build.calcsTab.mainEnv
+	local groups = build.skillsTab and build.skillsTab.socketGroupList or {}
+	for _, skill in ipairs(env and env.player and env.player.activeSkillList or {}) do
+		local amount = num(skill.skillData and skill.skillData.ManaReservedBase)
+		if amount and amount > 0 then
+			local groupIndex
+			for i, g in ipairs(groups) do if g == skill.socketGroup then groupIndex = i break end end
+			local effect = skill.activeEffect
+			t_insert(reservers, { name = effect and effect.grantedEffect and effect.grantedEffect.name or '?',
+				level = effect and effect.level, group = groupIndex, mana = m_floor(amount) })
+		end
+	end
+	table.sort(reservers, function(a, b) return a.mana > b.mana end)
+	res.mana.reservations = reservers
+	if manaUnreserved < 0 then
+		local list = {}
+		for _, r in ipairs(reservers) do t_insert(list, string.format('%s (group %s) %d', r.name, r.group or '?', r.mana)) end
+		issue('warning', 'reservation', 'Mana is over-reserved by ' .. -manaUnreserved
+			.. (#list > 0 and ('. Reserving: ' .. table.concat(list, ', ')) or '')
+			.. '. PoB counts every aura as on (an import cannot tell which are switched on in game): ask the player which ones they run'
+			.. ' and switch the others off (edit gem enabled=false) before treating this as a problem')
 	elseif num(o.ManaCost) and o.ManaCost > manaUnreserved then issue('error', 'mana', 'Main skill costs ' .. o.ManaCost .. ' mana but only ' .. manaUnreserved .. ' is unreserved') end
 	res.attributes = {}
 	for _, a in ipairs({ 'Str', 'Dex', 'Int' }) do
