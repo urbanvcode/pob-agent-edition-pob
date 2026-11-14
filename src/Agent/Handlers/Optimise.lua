@@ -14,6 +14,8 @@ local costWarnings, costReport = shared.costWarnings, shared.costReport
 
 local ELEMENTS = { 'Fire', 'Cold', 'Lightning' }
 local HIT_TYPES = { 'Physical', 'Fire', 'Cold', 'Lightning', 'Chaos' }
+local AILMENTS = { 'Freeze', 'Stun', 'Chill', 'Shock', 'Ignite', 'Bleed', 'Poison', 'CorruptedBlood' }
+local AILMENT_NAME = { Bleed = 'bleeding', CorruptedBlood = 'corrupted blood' }
 
 -- Goals -------------------------------------------------------------------------
 -- config: temporary config for the goal (nil = the player's config as it is).
@@ -66,7 +68,28 @@ local function metrics(o)
 	for _, k in ipairs({ 'Fire', 'Cold', 'Lightning', 'Chaos' }) do m.res[k] = num(o[k .. 'Resist']) or 0 end
 	m.attr = {}
 	for _, a in ipairs({ 'Str', 'Dex', 'Int' }) do m.attr[a], m.attr['Req' .. a] = num(o[a]) or 0, num(o['Req' .. a]) or 0 end
+	m.avoid = {}
+	for _, a in ipairs(AILMENTS) do m.avoid[a] = num(o[a .. 'AvoidChance']) or 0 end
 	return m
+end
+
+-- Ailment avoidance the change takes away: an immunity (100%) lost, or 25 points or more gone.
+-- None of it is in the goal's score, so it is said out loud (being frozen or stunned can kill).
+local function avoidLoss(base, m)
+	local lost
+	for _, a in ipairs(AILMENTS) do
+		local from, to = base.avoid and base.avoid[a] or 0, m.avoid and m.avoid[a] or 0
+		if (from >= 100 and to < 100) or from - to >= 25 then
+			lost = lost or {}
+			t_insert(lost, { ailment = a, from = from, to = to, immunity = from >= 100 or nil })
+		end
+	end
+	return lost
+end
+local function avoidText(l)
+	local name = AILMENT_NAME[l.ailment] or l.ailment:lower()
+	if l.immunity then return string.format('loses %s immunity: %d%% -> %d%% avoidance', name, l.from, l.to) end
+	return string.format('lowers %s avoidance: %d%% -> %d%%', name, l.from, l.to)
 end
 
 local function gainOf(base, m)
@@ -82,6 +105,7 @@ local function gainOf(base, m)
 		if m_abs(d) >= 1 then g.res[k:lower()] = d end
 	end
 	g.cost = m.cost
+	g.avoidLost = avoidLoss(base, m)
 	-- Attribute requirements the change leaves unmet (a gem then does nothing in game).
 	if m.attr and base.attr and handlers.attribute_short then g.attrShort = handlers.attribute_short(m.attr, base.attr) end
 	return g
@@ -139,6 +163,31 @@ end
 local UTILITY_FLASKS = { 'Diamond Flask', 'Granite Flask', 'Jade Flask', 'Quartz Flask', 'Silver Flask', 'Basalt Flask',
 	'Bismuth Flask', 'Amethyst Flask', 'Ruby Flask', 'Sapphire Flask', 'Topaz Flask', 'Sulphur Flask', 'Stibnite Flask',
 	'Aquamarine Flask', 'Corundum Flask', 'Quicksilver Flask', 'Gold Flask' }
+
+-- Immunities a flask's mods grant ("Grants Immunity to Freeze for 4 seconds if used while Frozen",
+-- "Immunity to Freeze and Chill during Flask effect", "Immune to Poison during Flask Effect").
+-- key = the AvoidChance stat PoB has for it (nil: no such stat, e.g. curses or maim).
+local IMMUNITY_WORDS = {
+	{ 'freeze', 'Freeze' }, { 'chill', 'Chill' }, { 'shock', 'Shock' }, { 'ignite', 'Ignite' }, { 'bleed', 'Bleed', 'bleeding' },
+	{ 'poison', 'Poison' }, { 'corrupted blood', 'CorruptedBlood' }, { 'curse', nil, 'curses' }, { 'maim', nil }, { 'hinder', nil },
+}
+local function flaskImmunities(item)
+	local found, seen = {}, {}
+	for _, list in ipairs({ item.implicitModLines or {}, item.explicitModLines or {}, item.enchantModLines or {} }) do
+		for _, ml in ipairs(list) do
+			local line = tostring(ml.line or ''):lower()
+			if line:find('immun') then
+				for _, w in ipairs(IMMUNITY_WORDS) do
+					if line:find(w[1], 1, true) and not seen[w[1]] then
+						seen[w[1]] = true
+						t_insert(found, { key = w[2], name = w[3] or w[1] })
+					end
+				end
+			end
+		end
+	end
+	return found
+end
 
 -- Standard stat lines for the scaling report: what one more step of each is worth.
 local SCALING = {
@@ -278,8 +327,19 @@ handlers.optimise = function(params)
 					t_insert(warn, string.format('needs %d %s, you have %d (%d short): get it from gear or passives first, the gain only counts once it is met', a.need, a.attr, a.have, a.short))
 				end
 			end
+			-- Ailment avoidance / immunity it takes away (PoB's numbers, plus flask suffixes PoB
+			-- does not count: extra.immunityLost). Hardcore: never suggested. Tankiness / balanced:
+			-- ranked after the changes that keep it. Other goals: said as a side effect.
+			local avoidLost = g.avoidLost
+			local immunityLost = extra and extra.immunityLost
+			if avoidLost or immunityLost then
+				if params.hardcore == true then return end
+				for _, l in ipairs(avoidLost or {}) do t_insert(warn, avoidText(l)) end
+				for _, t in ipairs(immunityLost or {}) do t_insert(warn, t) end
+			end
 			local c = { lever = lever, text = text, gain = g, score = s, units = units, value = s / m_max(units, 0.5), mechanic = LEVER_MECHANIC[lever],
-				sideEffects = #warn > 0 and warn or nil, attrShort = g.attrShort, unusable = g.attrShort and true or nil }
+				sideEffects = #warn > 0 and warn or nil, attrShort = g.attrShort, unusable = g.attrShort and true or nil,
+				avoidLoss = (avoidLost or immunityLost) and true or nil }
 			for k, v in pairs(extra or {}) do c[k] = v end
 			-- A change that leaves a skill without enough mana to use: ranked by the real result
 			-- (with the cheapest fix, or with that skill switched off), the fix ops added.
@@ -589,7 +649,7 @@ handlers.optimise = function(params)
 					if kind == 'Life' or kind == 'Hybrid' then lifeFlasks = lifeFlasks + 1 end
 					if item.baseName then worn[item.baseName] = true end
 					local active = not (set and set[slotName] and set[slotName].active == false)
-					t_insert(equipped, { index = i, item = item, kind = kind, active = active })
+					t_insert(equipped, { index = i, item = item, kind = kind, active = active, immune = flaskImmunities(item) })
 					if set and set[slotName] and not set[slotName].active then
 						local m = trial('flasks', { { op = 'flask', index = i, active = true } })
 						if m then
@@ -615,16 +675,21 @@ handlers.optimise = function(params)
 							local m = trial('flasks', { { op = 'flask', index = f.index, active = false } })
 							loss = m and -scoreOf(gainOf(base, m), w) or 0
 						end
-						t_insert(options, { f = f, loss = loss, order = isLife and 0 or (f.kind == 'Mana' and 2 or 1) })
+						t_insert(options, { f = f, loss = loss, order = isLife and 0 or (f.kind == 'Mana' and 2 or 1), immune = #f.immune > 0 })
 					end
 				end
+				-- A flask with an immunity suffix ("of Heat", "of Entropy", ...) is replaced last:
+				-- the immunity is not in the goal's score.
 				t_sort(options, function(a, b)
+					if a.immune ~= b.immune then return not a.immune end
 					if m_abs(a.loss - b.loss) > 0.3 then return a.loss < b.loss end
 					return a.order < b.order
 				end)
 				if options[1] then
-					targetSlot = options[1].f.index
-					replaced = { name = options[1].f.item.title or options[1].f.item.name or options[1].f.item.baseName or ('Flask ' .. targetSlot), kind = options[1].f.kind, loss = options[1].loss }
+					local f = options[1].f
+					targetSlot = f.index
+					replaced = { name = f.item.title or f.item.name or f.item.baseName or ('Flask ' .. targetSlot), kind = f.kind, loss = options[1].loss,
+						immune = f.immune, suffix = tostring(f.item.title or f.item.name or ''):match(' (of [%w\' ]+)$') }
 				end
 			end
 			if targetSlot then
@@ -636,7 +701,7 @@ handlers.optimise = function(params)
 						local m = trial('flasks', ops)
 						if m then
 							local g = gainOf(base, m)
-							if scoreOf(g, w) > 0.3 then t_insert(tries, { name = baseName, gain = g, score = scoreOf(g, w), ops = ops }) end
+							if scoreOf(g, w) > 0.3 then t_insert(tries, { name = baseName, gain = g, score = scoreOf(g, w), ops = ops, m = m }) end
 						end
 					end
 				end
@@ -644,8 +709,24 @@ handlers.optimise = function(params)
 				for i = 1, m_min(replaced and 3 or 2, #tries) do
 					local where = replaced and (' in place of ' .. replaced.name .. ' (Flask ' .. targetSlot .. ', plain base, no mods)')
 						or (' in the empty Flask ' .. targetSlot .. ' slot (plain base, no mods)')
+					-- Immunities of the replaced flask that PoB does not count (the "if used while
+					-- Frozen" kind) and that nothing else in the build covers.
+					local immunityLost
+					if replaced and #replaced.immune > 0 then
+						local names = {}
+						for _, im in ipairs(replaced.immune) do
+							local counted = false
+							for _, l in ipairs(tries[i].gain.avoidLost or {}) do if l.ailment == im.key then counted = true end end
+							local coveredElsewhere = im.key and (tries[i].m.avoid[im.key] or 0) >= 100
+							if not counted and not coveredElsewhere then t_insert(names, im.name) end
+						end
+						if #names > 0 then
+							immunityLost = { string.format('loses %s%s: immunity to %s when used (not in PoB\'s numbers)', replaced.name,
+								replaced.suffix and (' (its "' .. replaced.suffix .. '" suffix)') or '', table.concat(names, ', ')) }
+						end
+					end
 					local c = add('flask', tries[i].name .. where, tries[i].gain, 1,
-						{ name = tries[i].name, ops = tries[i].ops, cost = { buy = tries[i].name }, replaces = replaced and replaced.name })
+						{ name = tries[i].name, ops = tries[i].ops, cost = { buy = tries[i].name }, replaces = replaced and replaced.name, immunityLost = immunityLost })
 					if c and replaced and (replaced.kind == 'Mana' or replaced.kind == 'Life' or replaced.kind == 'Hybrid') then
 						c.sideEffects = c.sideEffects or {}
 						t_insert(c.sideEffects, 'loses a ' .. replaced.kind:lower() .. ' flask: its recovery is not in this score, check your ' .. (replaced.kind == 'Mana' and 'mana' or 'life') .. ' sustain')
@@ -705,7 +786,12 @@ handlers.optimise = function(params)
 								if m then
 									local g = gainOf(base, m)
 									local s = scoreOf(g, w)
-									if s > 0.3 and (not best or s > best.score) then best = { label = strip(e.label), val = e.val, gain = g, score = s, ops = ops } end
+									-- An option that keeps every ailment immunity / avoidance beats one that does not
+								-- (Soul of the Brine King can be the build's only freeze immunity).
+								local lossy = g.avoidLost and true or false
+								if s > 0.3 and (not best or (best.lossy and not lossy) or (best.lossy == lossy and s > best.score)) then
+									best = { label = strip(e.label), val = e.val, gain = g, score = s, ops = ops, lossy = lossy }
+								end
 								end
 							end
 						end
@@ -766,9 +852,11 @@ handlers.optimise = function(params)
 		local ranked = {}
 		for _, s in ipairs(suggestions) do if s.score > 0.05 then t_insert(ranked, s) end end
 		-- Changes the character cannot use yet (attributes short), and swaps that remove a gem PoB
-		-- counts as 0 (the loss is not measured), go after the clean ones.
+		-- counts as 0 (the loss is not measured), go after the clean ones. For a defence goal
+		-- (tankiness, balanced) so does a change that takes away ailment avoidance or an immunity.
+		local function late(s) return (s.unusable or s.caveat or (defenceGoal and s.avoidLoss)) and true or false end
 		t_sort(ranked, function(a, b)
-			local la, lb = (a.unusable or a.caveat) and true or false, (b.unusable or b.caveat) and true or false
+			local la, lb = late(a), late(b)
 			if la ~= lb then return not la end
 			if a.value ~= b.value then return a.value > b.value end
 			return a.score > b.score

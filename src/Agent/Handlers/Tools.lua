@@ -741,6 +741,9 @@ local KEY_FIELDS = {
 	'Armour', 'Evasion', 'EffectiveSpellSuppressionChance', 'BlockChance', 'SpellBlockChance',
 	'LifeRegenRecovery', 'LifeLeechGainRate', 'EffectiveMovementSpeedMod',
 	'Str', 'Dex', 'Int', 'ReqStr', 'ReqDex', 'ReqInt',
+	-- Ailment avoidance (100 = immune). Always measured, so before -> after shows a lost immunity.
+	'StunAvoidChance', 'FreezeAvoidChance', 'ChillAvoidChance', 'ShockAvoidChance', 'IgniteAvoidChance',
+	'BleedAvoidChance', 'PoisonAvoidChance', 'CorruptedBloodAvoidChance',
 }
 local function keyStats(extra, out)
 	local o = out or mainOutput()
