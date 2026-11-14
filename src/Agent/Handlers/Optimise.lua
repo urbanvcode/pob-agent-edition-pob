@@ -11,6 +11,7 @@ local recalc, assumptions, mainSkillName = shared.recalc, shared.assumptions, sh
 local capture, restore, applyOps = shared.capture, shared.restore, shared.applyOps
 local passiveOptions, treeSummary = shared.passiveOptions, shared.treeSummary
 local costWarnings, costReport = shared.costWarnings, shared.costReport
+local pobWarnings, warningDiff = shared.pobWarnings, shared.warningDiff
 
 local ELEMENTS = { 'Fire', 'Cold', 'Lightning' }
 local HIT_TYPES = { 'Physical', 'Fire', 'Cold', 'Lightning', 'Chaos' }
@@ -82,6 +83,7 @@ local function gainOf(base, m)
 		if m_abs(d) >= 1 then g.res[k:lower()] = d end
 	end
 	g.cost = m.cost
+	g.newWarnings = m.newWarnings
 	-- Attribute requirements the change leaves unmet (a gem then does nothing in game).
 	if m.attr and base.attr and handlers.attribute_short then g.attrShort = handlers.attribute_short(m.attr, base.attr) end
 	return g
@@ -209,6 +211,8 @@ handlers.optimise = function(params)
 		local base = metrics(baseOut)
 		-- Skills already short of mana before any change are not this run's business (diagnose says so).
 		local baseCost = costWarnings(baseOut)
+		local okBW, baseWarn = pcall(pobWarnings)
+		if not okBW then baseWarn = {} end
 		local baseGroups = #build.skillsTab.socketGroupList
 		-- What a change that blocks a skill (PoB: "You do not have enough Mana to use") really does:
 		-- the best of "the blocked skill switched off" and "one other reserving skill switched off
@@ -306,6 +310,13 @@ handlers.optimise = function(params)
 				end
 				c.sideEffects = warn
 			end
+			-- Any other warning PoB's side bar shows only after this change (attributes, sockets,
+			-- items, ...): said as a side effect and ranked after the changes that add none.
+			if g.newWarnings then
+				c.newWarnings = g.newWarnings
+				for _, l in ipairs(g.newWarnings) do t_insert(warn, 'PoB warning: ' .. l) end
+				c.sideEffects = warn
+			end
 			t_insert(suggestions, c)
 			return c
 		end
@@ -314,10 +325,26 @@ handlers.optimise = function(params)
 			local s = capture()
 			local results, failed = applyOps(ops)
 			local m = metrics(recalc())
+			-- PoB's own warnings this change adds. Skill-cost lines are left to costReport below.
+			local okW, lines = pcall(pobWarnings)
+			local diff = okW and warningDiff(baseWarn, lines)
+			if diff then
+				local other = {}
+				for _, l in ipairs(diff.added) do if not l:find('^You do not have enough') then t_insert(other, l) end end
+				if #other > 0 then m.newWarnings = other end
+			end
 			local okR, rep = true, nil
 			-- Only a change that would be suggested on paper is worth the extra trials.
 			if failed == 0 and scoreOf(gainOf(base, m), w) > 0.3 then okR, rep = pcall(costReport, baseCost, metrics) end
-			if okR and rep then m = realResult(m, rep) end
+			if okR and rep then
+				-- Reservation lines ("unreserved Mana is negative") belong to the mana case and its fix.
+				local nw
+				for _, l in ipairs(m.newWarnings or {}) do
+					if not l:lower():find('unreserved %a+ is negative') then nw = nw or {}; t_insert(nw, l) end
+				end
+				m = realResult(m, rep)
+				m.newWarnings = nw
+			end
 			local errs = restore(s)
 			counted(lever)
 			if failed > 0 then
@@ -773,6 +800,13 @@ handlers.optimise = function(params)
 			if a.value ~= b.value then return a.value > b.value end
 			return a.score > b.score
 		end)
+		-- Changes that add a PoB warning go after the ones that add none (order kept within each).
+		do
+			local clean, warned = {}, {}
+			for _, s in ipairs(ranked) do t_insert(s.newWarnings and warned or clean, s) end
+			for _, s in ipairs(warned) do t_insert(clean, s) end
+			ranked = clean
+		end
 		local total = #ranked
 		while #ranked > limit do table.remove(ranked) end
 		return {

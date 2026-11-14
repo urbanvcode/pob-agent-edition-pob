@@ -751,6 +751,16 @@ local function keyStats(extra, out)
 	if type(minion) == 'table' then r.MinionCombinedDPS = num(minion.CombinedDPS) or num(minion.TotalDPS) end
 	return r
 end
+-- Every PoB warning a change adds or takes away (lines compared as text).
+local function warningDiff(before, after)
+	local had, has, added, removed = {}, {}, {}, {}
+	for _, l in ipairs(before or {}) do had[l] = true end
+	for _, l in ipairs(after or {}) do has[l] = true; if not had[l] then t_insert(added, l) end end
+	for _, l in ipairs(before or {}) do if not has[l] then t_insert(removed, l) end end
+	if #added == 0 and #removed == 0 then return nil end
+	return { added = added, removed = removed }
+end
+
 -- Filled in below (it needs capture/restore).
 local costReport
 
@@ -763,10 +773,11 @@ end
 handlers.edit = function(params)
 	if type(params.ops) ~= 'table' or #params.ops == 0 then return { ok = false, error = 'ops must be a non-empty list' } end
 	local before = keyStats(params.fields)
-	local beforeCost = costWarnings()
+	local beforeCost, beforeWarn = costWarnings(), pobWarnings()
 	local results, failed = applyOps(params.ops)
 	recalc()
 	local res = { ok = true, results = results, failed = failed, before = before, after = keyStats(params.fields), assumptions = assumptions() }
+	res.warnings = warningDiff(beforeWarn, pobWarnings())
 	res.cost = costReport(beforeCost, function(o) return keyStats(params.fields, o) end)
 	return res
 end
@@ -894,12 +905,14 @@ handlers.what_if = function(params)
 	if type(params.ops) ~= 'table' or #params.ops == 0 then return { ok = false, error = 'ops must be a non-empty list' } end
 	local before = keyStats(params.fields)
 	local state = capture()
-	local beforeCost = costWarnings()
+	local beforeCost, beforeWarn = costWarnings(), pobWarnings()
 	local results, failed = applyOps(params.ops)
 	recalc()
 	local after = keyStats(params.fields)
+	local afterWarn = pobWarnings()
 	local kept = params.keep == true and failed == 0
 	local res = { ok = true, results = results, failed = failed, before = before, after = after, kept = kept, assumptions = assumptions() }
+	res.warnings = warningDiff(beforeWarn, afterWarn)
 	res.cost = costReport(beforeCost, function(o) return keyStats(params.fields, o) end)
 	if not kept then
 		local errors = restore(state)
@@ -1210,7 +1223,7 @@ loadfile(DIR .. 'Character.lua')(handlers, Ops, {
 loadfile(DIR .. 'Optimise.lua')(handlers, Ops, {
 	num = num, dpsOf = dpsOf, pctChange = pctChange, strip = strip, recalc = recalc, assumptions = assumptions, mainSkillName = mainSkillName,
 	capture = capture, restore = restore, applyOps = applyOps, passiveOptions = passiveOptions, treeSummary = treeSummary,
-	costWarnings = costWarnings, costReport = costReport,
+	costWarnings = costWarnings, costReport = costReport, pobWarnings = pobWarnings, warningDiff = warningDiff,
 })
 
 -- Economy: own items and what to look for (Stage 5)
