@@ -581,7 +581,7 @@ handlers.optimise = function(params)
 					t_sort(tries, function(a, b) return a.score > b.score end)
 					for i = 1, m_min(3, #tries) do
 						local recipe = {}
-						for _, oil in ipairs(tries[i].recipe or {}) do t_insert(recipe, tostring(oil)) end
+						for _, oil in ipairs(tries[i].recipe or {}) do t_insert(recipe, (tostring(oil):gsub('(%l)Oil$', '%1 Oil'))) end
 						add('anoint', 'Anoint ' .. tries[i].name .. ' on the amulet', tries[i].gain, 1,
 							{ name = tries[i].name, stats = tries[i].stats, recipe = recipe, cost = { buy = table.concat(recipe, ', '), note = 'replaces the current anoint' } })
 					end

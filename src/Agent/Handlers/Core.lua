@@ -53,7 +53,7 @@ local function evaluate_anoint_candidates(params)
           local ehp = (tonumber(output.TotalEHP or 0) or 0) - baseEhp
           local focus = params.focus or 'both'
           local score = focus == 'dps' and dps or (focus == 'defence' and ehp or (dps / math.max(baseDps, 1) + 0.5 * ehp / math.max(baseEhp, 1)))
-          local recipe = {}; for _, oil in ipairs(node.recipe or {}) do table.insert(recipe, tostring(oil)) end
+          local recipe = {}; for _, oil in ipairs(node.recipe or {}) do table.insert(recipe, (tostring(oil):gsub('(%l)Oil$', '%1 Oil'))) end
           table.insert(candidates, { nodeId = tonumber(id) or id, name = node.dn, dpsDelta = dps, ehpDelta = ehp, score = score, recipe = recipe })
           evaluated = evaluated + 1
         else skipped = skipped + 1 end
