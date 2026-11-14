@@ -267,6 +267,7 @@ handlers.optimise = function(params)
 		local spec = build.spec
 		local tree = treeSummary()
 		local pointsFree = tree.pointsAtLevel - tree.pointsUsed
+		local gemLevels = {}
 
 		-- 2. Passives within N points (notables, keystones, masteries) with their path.
 		local additions = {}
@@ -413,9 +414,14 @@ handlers.optimise = function(params)
 						end
 					end
 				end
+				-- Gem levels come with experience, so they are not an action. agent-mcp shows them
+				-- as a short note, or (trade/mixed) as a priced 20/20 copy when level 20 is usable.
+				local sg = build.skillsTab.socketGroupList[gres.group]
 				for _, u in ipairs(gres.levelUps or {}) do
-					add('gem level', 'Level ' .. u.name .. ' from ' .. u.from .. ' to ' .. u.to, gemGain(u.dpsPct), 1,
-						{ ops = { { op = 'gem', group = gres.group, gem = u.gem, level = u.to } }, cost = { note = 'level the gem (or buy a levelled copy)' } })
+					local gem = sg and sg.gemList[u.gem]
+					local top = gem and gem.gemData and m_min(gem.gemData.naturalMaxLevel or 20, 20) or 20
+					t_insert(gemLevels, { name = u.name, from = u.from, to = u.to, dpsPct = u.dpsPct, group = gres.group, gem = u.gem,
+						quality = gem and gem.quality or 0, maxLevel = top, canUseMax = u.to >= top })
 				end
 			end
 			local groupIndex = build.mainSocketGroup
@@ -681,7 +687,7 @@ handlers.optimise = function(params)
 			ok = true, goal = goalName, goalLabel = goal.label, reason = reason, metric = goal.metric, weights = w,
 			tempConfig = tempConfig, assumptions = assumptions(), mainSkill = mainSkillName(),
 			base = { singleTargetDps = base.st, dps = base.dps, ehp = base.ehp, weakestHit = base.hit, movementSpeed = base.ms, life = base.life, missingRes = base.miss },
-			suggestions = ranked, more = total - #ranked, undercount = undercount, blocked = blocked, scaling = scaling,
+			suggestions = ranked, gemLevels = gemLevels, more = total - #ranked, undercount = undercount, blocked = blocked, scaling = scaling,
 			unsetCounts = #unsetCounts > 0 and unsetCounts or nil,
 			pointsFree = pointsFree, maxPoints = maxPoints, evaluated = evaluated,
 		}
