@@ -10,6 +10,7 @@ local num, dpsOf, pctChange, strip = shared.num, shared.dpsOf, shared.pctChange,
 local recalc, assumptions, mainSkillName = shared.recalc, shared.assumptions, shared.mainSkillName
 local capture, restore, applyOps = shared.capture, shared.restore, shared.applyOps
 local passiveOptions, treeSummary = shared.passiveOptions, shared.treeSummary
+local costWarnings, costReport = shared.costWarnings, shared.costReport
 
 local ELEMENTS = { 'Fire', 'Cold', 'Lightning' }
 local HIT_TYPES = { 'Physical', 'Fire', 'Cold', 'Lightning', 'Chaos' }
@@ -80,6 +81,7 @@ local function gainOf(base, m)
 		local d = (m.res[k] or 0) - (base.res[k] or 0)
 		if m_abs(d) >= 1 then g.res[k:lower()] = d end
 	end
+	g.cost = m.cost
 	-- Attribute requirements the change leaves unmet (a gem then does nothing in game).
 	if m.attr and base.attr and handlers.attribute_short then g.attrShort = handlers.attribute_short(m.attr, base.attr) end
 	return g
@@ -205,6 +207,44 @@ handlers.optimise = function(params)
 		end
 		local baseOut = recalc()
 		local base = metrics(baseOut)
+		-- Skills already short of mana before any change are not this run's business (diagnose says so).
+		local baseCost = costWarnings(baseOut)
+		local baseGroups = #build.skillsTab.socketGroupList
+		-- What a change that blocks a skill (PoB: "You do not have enough Mana to use") really does:
+		-- the best of "the blocked skill switched off" and "one other reserving skill switched off
+		-- so everything fits", scored for this goal. The paper result (PoB still counting the
+		-- blocked skill) is never the one ranked.
+		local function realResult(paper, rep)
+			local names = {}
+			for _, cw in ipairs(rep.warnings) do t_insert(names, cw.skill) end
+			-- Ties on the goal score (within 0.05) go to the option that keeps more defence.
+			local best, bestScore, bestDef
+			local function consider(mm, fix)
+				local g = gainOf(base, mm)
+				local sc, def = scoreOf(g, w), g.ehpPct + g.hitPct
+				if not best or sc > bestScore + 0.05 or (sc > bestScore - 0.05 and def > bestDef) then
+					best, bestScore, bestDef = { m = mm, fix = fix }, sc, def
+				end
+			end
+			if rep.blockedOff then
+				consider(rep.blockedOff.stats, { text = 'stop using ' .. table.concat(names, ', ') .. ' (not enough mana left for it)', ops = rep.blockedOff.ops })
+			end
+			local options = {}
+			local paperScore = scoreOf(gainOf(base, paper), w)
+			for _, opt in ipairs(rep.options) do
+				local isNew = opt.group > baseGroups
+				local g = gainOf(base, opt.stats)
+				t_insert(options, { skill = opt.skill, fits = opt.fits, freed = opt.freed, isNew = isNew or nil,
+					lossPct = paperScore - scoreOf(g, w), dpsPct = pctChange(opt.stats.dps, paper.dps) })
+				if opt.fits and not isNew then
+					consider(opt.stats, { text = 'switch off ' .. opt.skill .. (opt.freed and (' (frees ' .. opt.freed .. ' mana)') or ''), ops = opt.ops, skill = opt.skill })
+				end
+			end
+			t_sort(options, function(a, b) return a.lossPct < b.lossPct end)
+			local m = best and best.m or paper
+			m.cost = { warnings = rep.warnings, options = options, fix = best and best.fix or nil, paperScore = paperScore, overReserved = rep.overReserved }
+			return m
+		end
 		local calc = build.calcsTab:GetMiscCalculator()
 		local okFast, fastOut = pcall(calc, {}, false)
 		local baseFast = okFast and metrics(fastOut) or base
@@ -241,6 +281,31 @@ handlers.optimise = function(params)
 			local c = { lever = lever, text = text, gain = g, score = s, units = units, value = s / m_max(units, 0.5), mechanic = LEVER_MECHANIC[lever],
 				sideEffects = #warn > 0 and warn or nil, attrShort = g.attrShort, unusable = g.attrShort and true or nil }
 			for k, v in pairs(extra or {}) do c[k] = v end
+			-- A change that leaves a skill without enough mana to use: ranked by the real result
+			-- (with the cheapest fix, or with that skill switched off), the fix ops added.
+			if g.cost then
+				c.costWarnings, c.costOptions = g.cost.warnings, g.cost.options
+				if g.cost.overReserved then
+					local names = {}
+					for _, cw in ipairs(g.cost.warnings) do t_insert(names, cw.skill) end
+					t_insert(warn, 'over-reserves mana on its own, so ' .. table.concat(names, ', ') .. " can't be used")
+				else
+					for _, cw in ipairs(g.cost.warnings) do t_insert(warn, cw.text) end
+				end
+				if g.cost.fix then
+					c.costFix = g.cost.fix
+					c.text = text .. ' + ' .. g.cost.fix.text
+					local ops = {}
+					for _, o in ipairs(c.ops or {}) do t_insert(ops, o) end
+					for _, o in ipairs(g.cost.fix.ops) do t_insert(ops, o) end
+					c.ops = ops
+					t_insert(warn, 'ranked with the fix: ' .. g.cost.fix.text)
+				else
+					c.unusable = true
+					t_insert(warn, 'no single reserving skill to switch off makes it fit')
+				end
+				c.sideEffects = warn
+			end
 			t_insert(suggestions, c)
 			return c
 		end
@@ -249,6 +314,10 @@ handlers.optimise = function(params)
 			local s = capture()
 			local results, failed = applyOps(ops)
 			local m = metrics(recalc())
+			local okR, rep = true, nil
+			-- Only a change that would be suggested on paper is worth the extra trials.
+			if failed == 0 and scoreOf(gainOf(base, m), w) > 0.3 then okR, rep = pcall(costReport, baseCost, metrics) end
+			if okR and rep then m = realResult(m, rep) end
 			local errs = restore(s)
 			counted(lever)
 			if failed > 0 then

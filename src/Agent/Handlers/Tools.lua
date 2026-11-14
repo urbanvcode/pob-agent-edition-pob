@@ -219,6 +219,89 @@ end
 local ELEMENTS = { 'Fire', 'Cold', 'Lightning' }
 local DAMAGE_TYPES = { 'Physical', 'Fire', 'Cold', 'Lightning', 'Chaos' }
 
+-- Skill costs ----------------------------------------------------------------------
+-- PoB's own check (Calcs.lua, the "You do not have enough Mana to use: ..." line in the
+-- side bar warnings): every enabled skill whose cost is more than the unreserved pool.
+-- PoB still counts such a skill's effect in DPS, so a change that reserves more mana can
+-- look like a gain while in game a mark or a guard skill can no longer be cast.
+local COST_POOLS = {
+	{ list = 'ManaCostWarningList', cost = 'ManaCost', pool = 'ManaUnreserved', resource = 'mana' },
+	{ list = 'LifeCostWarningList', cost = 'LifeCost', pool = 'LifeUnreserved', resource = 'life' },
+	{ list = 'ESCostWarningList', cost = 'ESCost', pool = 'EnergyShield', resource = 'energy shield' },
+	{ list = 'RageCostWarningList', cost = 'RageCost', pool = 'Rage', resource = 'rage' },
+	{ list = 'ManaPercentCostPercentCostWarningList', cost = 'ManaPercentCost', pool = 'ManaUnreservedPercent', resource = 'mana', percent = true },
+	{ list = 'LifePercentCostPercentCostWarningList', cost = 'LifePercentCost', pool = 'LifeUnreservedPercent', resource = 'life', percent = true },
+}
+
+-- Group and gem index of an active skill (for a { op = 'gem', enabled = false } op).
+local function skillPlace(skill)
+	local src = skill.activeEffect and skill.activeEffect.srcInstance
+	for gi, g in ipairs(build.skillsTab and build.skillsTab.socketGroupList or {}) do
+		if g == skill.socketGroup then
+			for ji, gem in ipairs(g.gemList or {}) do if gem == src then return gi, ji end end
+			return gi, nil
+		end
+	end
+	return nil, nil
+end
+
+local function costWarnings(o)
+	o = o or mainOutput()
+	local out = {}
+	if not o then return out end
+	local env = build.calcsTab and build.calcsTab.mainEnv
+	local cache = GlobalCache and GlobalCache.cachedData and GlobalCache.cachedData.MAIN
+	for _, p in ipairs(COST_POOLS) do
+		local names = type(o[p.list]) == 'table' and o[p.list] or nil
+		for _, name in ipairs(names or {}) do
+			local w = { skill = name, resource = p.resource, percent = p.percent or nil, pool = num(o[p.pool]) }
+			if p.resource == 'mana' and not p.percent and o.EnergyShieldProtectsMana then
+				w.pool = (w.pool or 0) + (num(o.EnergyShield) or 0)
+				w.resource = 'energy shield and mana'
+			end
+			for _, skill in ipairs(env and env.player and env.player.activeSkillList or {}) do
+				local effect = skill.activeEffect and skill.activeEffect.grantedEffect
+				if effect and effect.name == name then
+					local okU, uuid = pcall(cacheSkillUUID, skill, env)
+					local cached = okU and cache and cache[uuid]
+					w.cost = cached and cached.Env and num(cached.Env.player.output[p.cost]) or w.cost
+					w.group, w.gem = skillPlace(skill)
+					if w.cost then break end
+				end
+			end
+			-- A negative pool (over-reserved) makes PoB list even free skills: only real costs count.
+			if w.cost and w.cost > 0 then
+				local unit = p.percent and '%' or ''
+				w.text = string.format("%s costs %s%s %s but only %s%s is unreserved: it can't be used",
+					name, tostring(math.ceil(w.cost)), unit, w.resource, tostring(m_floor(w.pool or 0)), unit)
+				t_insert(out, w)
+			end
+		end
+	end
+	return out
+end
+handlers.cost_warnings = function() return { ok = true, warnings = costWarnings() } end
+
+-- The cost warnings in `after` that were not there in `before` (by skill and pool).
+local function newCostWarnings(before, after)
+	local had, out = {}, {}
+	for _, w in ipairs(before or {}) do had[w.skill .. '|' .. w.resource] = true end
+	for _, w in ipairs(after or {}) do if not had[w.skill .. '|' .. w.resource] then t_insert(out, w) end end
+	return out
+end
+
+-- PoB's side bar warning lines ("1 Warnings"), colour codes removed.
+local function pobWarnings()
+	local lines = {}
+	if build.controls and build.controls.warnings and build.RefreshStatList then
+		local ok = pcall(build.RefreshStatList, build)
+		if ok then for _, l in ipairs(build.controls.warnings.lines or {}) do t_insert(lines, strip(l)) end end
+		if ok then return lines end
+	end
+	for _, w in ipairs(costWarnings()) do t_insert(lines, 'You do not have enough ' .. w.resource .. ' to use: ' .. w.skill) end
+	return lines
+end
+
 handlers.diagnose = function()
 	local o, err = mainOutput()
 	if not o then return { ok = false, error = err } end
@@ -312,7 +395,20 @@ handlers.diagnose = function()
 			.. (#list > 0 and ('. Reserving: ' .. table.concat(list, ', ')) or '')
 			.. '. PoB counts every aura as on (an import cannot tell which are switched on in game): ask the player which ones they run'
 			.. ' and switch the others off (edit gem enabled=false) before treating this as a problem')
-	elseif num(o.ManaCost) and o.ManaCost > manaUnreserved then issue('error', 'mana', 'Main skill costs ' .. o.ManaCost .. ' mana but only ' .. manaUnreserved .. ' is unreserved') end
+	end
+	-- Every enabled skill whose cost no longer fits (PoB's own check, not only the main skill).
+	res.costWarnings = costWarnings(o)
+	if manaUnreserved < 0 and #res.costWarnings > 0 then
+		-- Over-reserved (often an import with every aura on): one line, after the reservation question.
+		local names = {}
+		for _, w in ipairs(res.costWarnings) do t_insert(names, w.skill) end
+		issue('warning', 'mana', 'With this reservation PoB says these skills cannot be used (cost above the unreserved pool): ' .. table.concat(names, ', '))
+	else
+		for _, w in ipairs(res.costWarnings) do
+			issue('error', 'mana', w.text .. '. PoB still counts its effect in DPS: switch off a reserving skill (optimise or what_if shows the cheapest) or the skill itself')
+		end
+	end
+	if #res.costWarnings == 0 and num(o.ManaCost) and o.ManaCost > manaUnreserved and manaUnreserved >= 0 then issue('error', 'mana', 'Main skill costs ' .. o.ManaCost .. ' mana but only ' .. manaUnreserved .. ' is unreserved') end
 	res.attributes = {}
 	for _, a in ipairs({ 'Str', 'Dex', 'Int' }) do
 		local have, need = num(o[a]) or 0, num(o['Req' .. a]) or 0
@@ -362,6 +458,7 @@ handlers.diagnose = function()
 	if emptySockets > 0 then issue('warning', 'items', emptySockets .. ' allocated jewel socket(s) are empty') end
 	if emptyFlasks > 0 then issue(emptyFlasks >= 3 and 'error' or 'warning', 'items', emptyFlasks .. ' of 5 flask slots are empty') end
 	res.issues = issues
+	res.pobWarnings = pobWarnings()
 	return { ok = true, diagnosis = res }
 end
 
@@ -645,8 +742,8 @@ local KEY_FIELDS = {
 	'LifeRegenRecovery', 'LifeLeechGainRate', 'EffectiveMovementSpeedMod',
 	'Str', 'Dex', 'Int', 'ReqStr', 'ReqDex', 'ReqInt',
 }
-local function keyStats(extra)
-	local o = mainOutput()
+local function keyStats(extra, out)
+	local o = out or mainOutput()
 	local r = {}
 	for _, k in ipairs(KEY_FIELDS) do r[k] = num(o and o[k]) end
 	for _, k in ipairs(type(extra) == 'table' and extra or {}) do r[k] = num(o and o[k]) end
@@ -654,6 +751,9 @@ local function keyStats(extra)
 	if type(minion) == 'table' then r.MinionCombinedDPS = num(minion.CombinedDPS) or num(minion.TotalDPS) end
 	return r
 end
+-- Filled in below (it needs capture/restore).
+local costReport
+
 handlers.key_stats = function(params)
 	return { ok = true, stats = keyStats(params.fields), mainSkill = mainSkillName(), assumptions = assumptions(),
 		name = build.buildName, level = tonumber(build.characterLevel), className = build.spec.curClassName, ascendancy = build.spec.curAscendClassName }
@@ -663,9 +763,12 @@ end
 handlers.edit = function(params)
 	if type(params.ops) ~= 'table' or #params.ops == 0 then return { ok = false, error = 'ops must be a non-empty list' } end
 	local before = keyStats(params.fields)
+	local beforeCost = costWarnings()
 	local results, failed = applyOps(params.ops)
 	recalc()
-	return { ok = true, results = results, failed = failed, before = before, after = keyStats(params.fields), assumptions = assumptions() }
+	local res = { ok = true, results = results, failed = failed, before = before, after = keyStats(params.fields), assumptions = assumptions() }
+	res.cost = costReport(beforeCost, function(o) return keyStats(params.fields, o) end)
+	return res
 end
 
 -- Snapshot of everything an op can touch, using PoB's own undo states.
@@ -723,16 +826,81 @@ local function restore(s)
 	return errors
 end
 
+-- After a change: the skills it left without enough mana / life / ES to use (PoB's warning),
+-- the result with those skills switched off (what happens in game), and every reserving
+-- skill that could be switched off instead, cheapest first. Each option is measured with
+-- `measure` in a nested trial that is rolled back; the build stays as the change left it.
+-- Returns nil when the change blocks nothing new.
+costReport = function(beforeCost, measure)
+	local fresh = newCostWarnings(beforeCost, costWarnings())
+	if #fresh == 0 then return nil end
+	local rep = { warnings = fresh, options = {} }
+	local function nested(ops)
+		local s = capture()
+		local results, failed = applyOps(ops)
+		local o = recalc()
+		local m = measure(o)
+		local still = newCostWarnings(beforeCost, costWarnings(o))
+		local unreserved = num(o and o.ManaUnreserved)
+		local errs = restore(s)
+		if #errs > 0 then error('could not restore the build: ' .. table.concat(errs, '; ')) end
+		if failed > 0 then return nil end
+		return m, still, unreserved
+	end
+	local paper = recalc()
+	rep.manaUnreserved = num(paper and paper.ManaUnreserved)
+	-- Over-reserved: the change's own reservation does not fit, so every skill is short. Switching
+	-- them all off is not a result worth showing; only the reserving skills to switch off are.
+	rep.overReserved = (rep.manaUnreserved or 0) < 0 or nil
+	-- Read every place first: each nested trial rebuilds the skill groups and the calc env.
+	local offOps, blockedNames = {}, {}
+	for _, w in ipairs(fresh) do
+		blockedNames[w.skill] = true
+		if w.group and w.gem then t_insert(offOps, { op = 'gem', group = w.group, gem = w.gem, enabled = false }) end
+	end
+	local env = build.calcsTab and build.calcsTab.mainEnv
+	local reservers, tried = {}, {}
+	for _, skill in ipairs(env and env.player and env.player.activeSkillList or {}) do
+		local effect = skill.activeEffect and skill.activeEffect.grantedEffect
+		local name = effect and effect.name
+		local reserved = (num(skill.skillData and skill.skillData.ManaReservedBase) or 0) + (num(skill.skillData and skill.skillData.LifeReservedBase) or 0)
+		if name and reserved > 0 and not tried[name] and #reservers < 8 then
+			tried[name] = true
+			local gi, ji = skillPlace(skill)
+			if gi and ji then t_insert(reservers, { skill = name, group = gi, gem = ji, reserved = m_floor(reserved) }) end
+		end
+	end
+	-- 1. The blocked skills switched off: the real result of the change as it stands.
+	if #offOps > 0 and not rep.overReserved then
+		local m = nested(offOps)
+		if m then rep.blockedOff = { stats = m, ops = offOps } end
+	end
+	-- 2. One reserving skill switched off instead (an aura, herald, minion or guard skill).
+	for _, r in ipairs(reservers) do
+		local ops = { { op = 'gem', group = r.group, gem = r.gem, enabled = false } }
+		local m, still, unreserved = nested(ops)
+		if m then
+			r.ops, r.stats = ops, m
+			r.fits = #still == 0 and (unreserved or 0) >= 0
+			r.freed = unreserved and rep.manaUnreserved and m_floor(unreserved - rep.manaUnreserved) or nil
+			t_insert(rep.options, r)
+		end
+	end
+	return rep
+end
+
 -- params: { ops, keep = bool, fields }
 handlers.what_if = function(params)
 	if type(params.ops) ~= 'table' or #params.ops == 0 then return { ok = false, error = 'ops must be a non-empty list' } end
 	local before = keyStats(params.fields)
 	local state = capture()
+	local beforeCost = costWarnings()
 	local results, failed = applyOps(params.ops)
 	recalc()
 	local after = keyStats(params.fields)
 	local kept = params.keep == true and failed == 0
 	local res = { ok = true, results = results, failed = failed, before = before, after = after, kept = kept, assumptions = assumptions() }
+	res.cost = costReport(beforeCost, function(o) return keyStats(params.fields, o) end)
 	if not kept then
 		local errors = restore(state)
 		local check = keyStats(params.fields)
@@ -1042,6 +1210,7 @@ loadfile(DIR .. 'Character.lua')(handlers, Ops, {
 loadfile(DIR .. 'Optimise.lua')(handlers, Ops, {
 	num = num, dpsOf = dpsOf, pctChange = pctChange, strip = strip, recalc = recalc, assumptions = assumptions, mainSkillName = mainSkillName,
 	capture = capture, restore = restore, applyOps = applyOps, passiveOptions = passiveOptions, treeSummary = treeSummary,
+	costWarnings = costWarnings, costReport = costReport,
 })
 
 -- Economy: own items and what to look for (Stage 5)
