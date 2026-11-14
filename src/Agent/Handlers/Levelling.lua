@@ -532,18 +532,25 @@ local function nextSteps(me, plan, limit)
 		end
 	end
 	local nowShort = {}
-	for _, e in ipairs(r.elements) do if e.name ~= 'Chaos' and e.missingNow > 0 then t_insert(nowShort, string.format('%s +%d', e.name, e.missingNow)) end end
-	if #nowShort > 0 then add('resists', 'Uncapped now: ' .. t_concat(nowShort, ', ')) end
+	for _, e in ipairs(r.elements) do if e.name ~= 'Chaos' and e.missingNow > 0 then t_insert(nowShort, string.format('%s resistance %d%% under the cap', e.name, e.missingNow)) end end
+	if #nowShort > 0 then add('resists', 'Resistances not capped now: ' .. t_concat(nowShort, ', ')) end
 	-- Lab
 	for _, lab in ipairs(plan.milestones.labs) do
 		if lab.status == 'next' then
 			local nodes = #lab.nodes > 0 and ('; take ' .. t_concat(lab.nodes, ', ')) or ''
-			local need = string.format('%d trials (Acts %d-%d)', #lab.trials, lab.trials[1] and lab.trials[1].act or 0, lab.afterAct or 0)
-			if lab.ready then add('lab', string.format('%s Labyrinth (monster level %d): ready once the %s are done%s', lab.name, lab.monsterLevel, need, nodes), { source = 'lab' })
+			-- The trials this lab needs, by name; nothing when the data has none (the Eternal Labyrinth needs none).
+			local need
+			if #lab.trials > 0 then
+				local names, lo, hi = {}, lab.trials[1].act, lab.trials[1].act
+				for _, t in ipairs(lab.trials) do t_insert(names, t.area) lo = m_min(lo, t.act) hi = m_max(hi, t.act) end
+				need = string.format('%d trials (%s: %s)', #lab.trials, lo == hi and ('Act ' .. lo) or string.format('Acts %d-%d', lo, hi), t_concat(names, ', '))
+			end
+			if lab.maps then
+				add('lab', string.format('%s Labyrinth (monster level %d): %s with an Offering to the Goddess%s', lab.name, lab.monsterLevel,
+					me.level >= lab.minLevel and 'you can run it now' or ('from level ' .. lab.minLevel), nodes), { source = 'lab' })
+			elseif lab.ready then add('lab', string.format('%s Labyrinth (monster level %d): ready%s%s', lab.name, lab.monsterLevel, need and (' once the ' .. need .. ' are done') or '', nodes), { source = 'lab' })
 			elseif lab.afterAct and act <= lab.afterAct then
-				add('lab', string.format('%s Labyrinth after its %s%s%s', lab.name, need, lab.minLevel > 0 and (' and level ' .. lab.minLevel) or '', nodes), { source = 'lab' })
-			elseif lab.maps then
-				add('lab', string.format('%s Labyrinth from level %d in maps (an Offering to the Goddess)%s', lab.name, lab.minLevel, nodes), { source = 'lab' })
+				add('lab', string.format('%s Labyrinth after %s%s%s', lab.name, need and ('its ' .. need) or ('Act ' .. lab.afterAct), lab.minLevel > 0 and (' and level ' .. lab.minLevel) or '', nodes), { source = 'lab' })
 			end
 		end
 	end

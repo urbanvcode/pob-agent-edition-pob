@@ -156,3 +156,114 @@ handlers.character_import = function(params)
 	if not output then return { ok = false, error = outErr } end
 	return { ok = true, state = characterState(), keptOff = keptOff }
 end
+
+-- Fight settings (Configuration tab) and which skill gems are switched on: what
+-- a sync compares with another build of the same character, or with the last
+-- sync. Keys PoB's importer sets from the character itself are left out.
+local IMPORTER_SET = { bandit = true, pantheonMajorGod = true, pantheonMinorGod = true, resistancePenalty = true, buildName = true }
+
+local function fightSettings()
+	local tab = build.configTab
+	local config = {}
+	for k, v in pairs(tab.input or {}) do
+		local tv = type(v)
+		if not IMPORTER_SET[k] and (tv == 'boolean' or tv == 'number' or tv == 'string') and v ~= tab:GetDefaultState(k, tv) then
+			config[k] = v
+		end
+	end
+	-- Active skill gems by name: true when any copy is switched on (gem and its group).
+	local gems = {}
+	for _, g in ipairs(build.skillsTab.socketGroupList or {}) do
+		for _, gem in ipairs(g.gemList or {}) do
+			local gd = gem.gemData
+			if gd and gd.name and not (gd.grantedEffect and gd.grantedEffect.support) then
+				gems[gd.name] = gems[gd.name] == true or (gem.enabled ~= false and g.enabled ~= false)
+			end
+		end
+	end
+	return config, gems
+end
+
+handlers.config_profile = function()
+	if not build or not build.configTab then return { ok = false, error = 'no build open in PoB' } end
+	h.mainOutput()
+	local config, gems = fightSettings()
+	return { ok = true, config = config, gems = gems, mainSkill = h.mainSkillName(),
+		className = build.spec.curClassName, ascendancy = build.spec.curAscendClassName }
+end
+
+local configVars
+local function configVar(key)
+	if configVars == nil then
+		configVars = {}
+		local okLoad, list = pcall(LoadModule, 'Modules/ConfigOptions')
+		for _, var in ipairs(okLoad and type(list) == 'table' and list or {}) do
+			if var.var and not configVars[var.var] then configVars[var.var] = var end
+		end
+	end
+	return configVars[key]
+end
+
+local function showValue(key, v)
+	if v == nil then
+		-- Not set: PoB's default for that option (off, 0 or the list's first choice).
+		local var = configVar(key)
+		local hint = var and (var.type == 'check' and 'boolean' or var.type == 'list' and 'string' or 'number') or 'string'
+		v = build.configTab:GetDefaultState(key, hint)
+		if v == nil or v == '' then return 'default' end
+	end
+	local label = Ops.config_value_label and Ops.config_value_label(key, v)
+	if label then return strip(label) end
+	if v == true then return 'on' elseif v == false then return 'off' end
+	return tostring(v)
+end
+
+-- params: { config = {key = value}, gems = {name = on} } from config_profile of
+-- another build (or the last sync). Lists what differs in the open build and
+-- simulates the open build with those settings (rolled back, nothing changes).
+-- Returns the differences, the edit ops that copy them, and stats before/after.
+handlers.config_effect = function(params)
+	if not build or not build.configTab then return { ok = false, error = 'no build open in PoB' } end
+	h.mainOutput()
+	local tab = build.configTab
+	local other = type(params.config) == 'table' and params.config or {}
+	local otherGems = type(params.gems) == 'table' and params.gems or {}
+	local mine, myGems = fightSettings()
+	local keys = {}
+	for k in pairs(other) do if not IMPORTER_SET[k] then keys[k] = true end end
+	for k in pairs(mine) do keys[k] = true end
+	local diffs, values = {}, {}
+	for k in pairs(keys) do
+		local ov, mv = other[k], mine[k]
+		if ov ~= mv and configVar(k) then
+			local var = configVar(k)
+			local target = ov
+			if target == nil then target = tab:GetDefaultState(k, type(mv)) end
+			values[k] = target
+			t_insert(diffs, { key = k, label = strip(var.label or k):gsub(':$', ''), now = showValue(k, mv), other = showValue(k, ov) })
+		end
+	end
+	table.sort(diffs, function(a, b) return a.key < b.key end)
+	local ops = {}
+	if next(values) then t_insert(ops, { op = 'config', values = values }) end
+	local gemDiffs, seen = {}, {}
+	for gi, g in ipairs(build.skillsTab.socketGroupList or {}) do
+		for ji, gem in ipairs(g.gemList or {}) do
+			local gd = gem.gemData
+			local name = gd and gd.name
+			local want = name and otherGems[name]
+			if want ~= nil and not (gd.grantedEffect and gd.grantedEffect.support) then
+				local on = gem.enabled ~= false and g.enabled ~= false
+				if want ~= on then
+					if want and g.enabled == false then t_insert(ops, { op = 'group_enabled', group = gi, enabled = true }) end
+					if want and gem.enabled == false or not want then t_insert(ops, { op = 'gem', group = gi, gem = ji, enabled = want }) end
+					if not seen[name] then seen[name] = true t_insert(gemDiffs, { name = name, now = on, other = want }) end
+				end
+			end
+		end
+	end
+	if #ops == 0 then return { ok = true, diffs = diffs, gems = gemDiffs, ops = ops } end
+	local res = handlers.what_if({ ops = ops })
+	if not res or not res.ok then return { ok = false, error = res and res.error or 'what_if failed' } end
+	return { ok = true, diffs = diffs, gems = gemDiffs, ops = ops, before = res.before, after = res.after, rolledBack = res.rolledBack }
+end
