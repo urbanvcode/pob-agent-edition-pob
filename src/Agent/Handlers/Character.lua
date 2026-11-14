@@ -105,6 +105,18 @@ handlers.character_import = function(params)
 	if type(passives) ~= 'table' or type(passives.hashes) ~= 'table' then return { ok = false, error = 'passives (get-passive-skills response) is required' } end
 	local tab = build.importTab
 	local input = build.configTab.input
+	-- The game does not say which auras are switched on, so the importer turns
+	-- every gem on. Skill gems the player switched off in this build (gem or its
+	-- group) stay off after the sync.
+	local keepOff = {}
+	for _, g in ipairs(build.skillsTab.socketGroupList or {}) do
+		for _, gem in ipairs(g.gemList or {}) do
+			local gd = gem.gemData
+			if gd and gd.name and not (gd.grantedEffect and gd.grantedEffect.support) and (gem.enabled == false or g.enabled == false) then
+				keepOff[gd.name] = true
+			end
+		end
+	end
 	local ok, err = pcall(function()
 		-- Same shape PoB builds from the account-name endpoints (ImportTab:DownloadPassiveTree/DownloadItems).
 		local base = {}
@@ -123,6 +135,16 @@ handlers.character_import = function(params)
 		tab:ImportItemsAndSkills(itemData, true, true, false)
 	end)
 	if not ok then return { ok = false, error = 'PoB could not import the character: ' .. tostring(err) } end
+	local keptOff, seen = {}, {}
+	for _, g in ipairs(build.skillsTab.socketGroupList or {}) do
+		for _, gem in ipairs(g.gemList or {}) do
+			local gd = gem.gemData
+			if gd and gd.name and keepOff[gd.name] and not (gd.grantedEffect and gd.grantedEffect.support) then
+				gem.enabled = false
+				if not seen[gd.name] then seen[gd.name] = true t_insert(keptOff, gd.name) end
+			end
+		end
+	end
 	tab.lastCharacterHash = common.sha1(char.name)
 	tab.lastLeague = char.league
 	tab.lastRealm = (params.realm and tostring(params.realm):upper()) or tab.lastRealm
@@ -132,5 +154,5 @@ handlers.character_import = function(params)
 	build.buildFlag = true
 	local output, outErr = h.mainOutput()
 	if not output then return { ok = false, error = outErr } end
-	return { ok = true, state = characterState() }
+	return { ok = true, state = characterState(), keptOff = keptOff }
 end
