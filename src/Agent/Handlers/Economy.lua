@@ -183,7 +183,8 @@ handlers.economy_targets = function(params)
 				local st = stats[i]
 				local alone = minWeight > 0 and minWeight / st.weight or nil
 				if alone then alone = alone >= 10 and m_floor(alone + 0.5) or m_floor(alone * 10 + 0.5) / 10 end
-				t_insert(list, { text = st.text, id = st.id, value = m_floor(st.worth / topWorth * 100 + 0.5), max = st.max,
+				-- worth: the build's relative gain of a top roll x1000, comparable across slots (slot ordering).
+				t_insert(list, { text = st.text, id = st.id, value = m_floor(st.worth / topWorth * 100 + 0.5), max = st.max, worth = st.worth,
 					-- How much alone beats the current item; only when one roll can reach it.
 					alone = alone and (not st.max or alone <= st.max) and alone or nil })
 			end
