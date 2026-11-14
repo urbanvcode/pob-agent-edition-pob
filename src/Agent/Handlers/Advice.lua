@@ -19,6 +19,73 @@ local function simulate(fn)
 	return res
 end
 
+-- Skill count settings ---------------------------------------------------------
+-- Config "counts" that belong to a socketed skill and are 0 (unset) in PoB, as after
+-- a character import. Some make the gem do nothing at 0 (Trinity's resonance), so
+-- every number about that gem is wrong until it is set. Those get a realistic value
+-- the optimiser and suggest_gems measure with (and say so); the rest are only listed.
+local REALISTIC_COUNT = {
+	configResonanceCount = { value = 50, note = 'Trinity gives no damage at 0 resonance; 50 is the most PoB counts' },
+	configUnholyResonanceCount = { value = 50, note = 'Unholy Trinity gives no damage at 0 resonance; 50 is the most PoB counts' },
+}
+handlers.skill_count_gaps = function()
+	if not build or not build.configTab or not build.skillsTab then return { ok = false, error = 'no build loaded' } end
+	local okLoad, varList = pcall(LoadModule, 'Modules/ConfigOptions')
+	if not okLoad or type(varList) ~= 'table' then return { ok = false, error = 'could not load PoB config options' } end
+	local input = build.configTab.input or {}
+	local gems = {} -- enabled gem name (lower case) -> its socket group
+	for gi, g in ipairs(build.skillsTab.socketGroupList or {}) do
+		if g.enabled ~= false then
+			for _, gem in ipairs(g.gemList or {}) do
+				local name = gem.nameSpec or (gem.gemData and gem.gemData.name)
+				if name and gem.enabled ~= false and not gems[name:lower()] then gems[name:lower()] = gi end
+			end
+		end
+	end
+	local list = {}
+	for _, var in ipairs(varList) do
+		if var.type == 'count' and var.var and var.ifSkill and not var.defaultState and not var.defaultPlaceholderState then
+			local label = strip(var.label or var.var):gsub(':%s*$', '')
+			local skill, group
+			for _, s in ipairs(type(var.ifSkill) == 'table' and var.ifSkill or { var.ifSkill }) do
+				local lower = tostring(s):lower()
+				group = gems[lower]
+				if not group and var.includeTransfigured then
+					for name, gi in pairs(gems) do if name:sub(1, #lower + 4) == lower .. ' of ' then group = gi end end
+				end
+				if group then skill = s break end
+			end
+			-- "(if not maximum)" and settings with a stated default already count something at 0.
+			local implicit = label:lower():find('if not', 1, true) or tostring(var.tooltip or ''):lower():find('default', 1, true)
+			local real = REALISTIC_COUNT[var.var]
+			if skill and (tonumber(input[var.var]) or 0) == 0 and (real or not implicit) then
+				t_insert(list, { var = var.var, label = label, skill = skill, group = group, value = real and real.value, note = real and real.note })
+			end
+		end
+	end
+	return { ok = true, list = list }
+end
+
+-- Attributes a change leaves short: Str/Dex/Int needed above what the character has,
+-- and more short than before. A gem whose requirement is not met does nothing in game.
+local ATTRIBUTES = { 'Str', 'Dex', 'Int' }
+local function attributeShort(o, baseOut)
+	local short
+	for _, a in ipairs(ATTRIBUTES) do
+		local need, have = num(o['Req' .. a]) or 0, num(o[a]) or 0
+		local baseShort = m_max((num(baseOut['Req' .. a]) or 0) - (num(baseOut[a]) or 0), 0)
+		if need - have > baseShort + 0.5 then
+			short = short or {}
+			t_insert(short, { attr = a, need = need, have = have, short = need - have, before = num(baseOut['Req' .. a]) or 0 })
+		end
+	end
+	return short
+end
+handlers.attribute_short = function(o, baseOut)
+	if type(o) ~= 'table' or type(baseOut) ~= 'table' then return nil end
+	return attributeShort(o, baseOut)
+end
+
 -- Support gems ---------------------------------------------------------------
 -- params: { group?, replace? (gem number), add? (bool), awakened? (default true), limit? }
 -- 1. What each current support is worth (DPS lost when it is switched off).
@@ -39,10 +106,29 @@ handlers.suggest_gems = function(params)
 			local o = recalc()
 			return dpsOf(o), o
 		end
+		-- Count settings of gems in this group that are 0 in PoB (Trinity's resonance):
+		-- measure with a realistic value, or the gem looks worthless and swapping it out looks good.
+		local assumed, unsetCounts = {}, {}
+		do
+			local okC, gaps = pcall(handlers.skill_count_gaps)
+			for _, gap in ipairs(okC and type(gaps) == 'table' and gaps.list or {}) do
+				if gap.group == groupIndex and gap.value then
+					local before = measure()
+					local r = Ops.set_config({ [gap.var] = gap.value })
+					if r and r.applied and r.applied[gap.var] then
+						t_insert(assumed, { var = gap.var, label = gap.label, skill = gap.skill, value = gap.value, note = gap.note, dpsPct = pctChange(measure(), before) })
+					end
+				elseif gap.group == groupIndex then
+					t_insert(unsetCounts, { var = gap.var, label = gap.label, skill = gap.skill })
+				end
+			end
+		end
 		local baseDps, baseOut = measure()
 		local skillName = mainSkillName()
 		if baseDps <= 0 then error('the skill in group ' .. groupIndex .. ' deals no damage in PoB (pick the damage skill group, or check the main skill)') end
 		local baseMana = num(baseOut.ManaCost) or 0
+		local baseAttr = {} -- copied: the output table may be reused by the next calculation
+		for _, a in ipairs(ATTRIBUTES) do baseAttr[a], baseAttr['Req' .. a] = baseOut[a], baseOut['Req' .. a] end
 		local baseFlags = {}
 		do
 			local main = build.calcsTab.mainEnv and build.calcsTab.mainEnv.player.mainSkill
@@ -144,6 +230,12 @@ handlers.suggest_gems = function(params)
 						local mana = num(o.ManaCost) or 0
 						if mana ~= baseMana then c.manaCost = mana end
 						if (num(o.ManaUnreserved) or 0) < mana and mana > 0 then c.warning = 'mana cost ' .. mana .. ' is more than the unreserved mana' end
+						c.attrShort = attributeShort(o, baseAttr)
+						if c.attrShort then
+							local parts = {}
+							for _, a in ipairs(c.attrShort) do t_insert(parts, string.format('needs %d %s, you have %d', a.need, a.attr, a.have)) end
+							c.warning = (c.warning and c.warning .. '; ' or '') .. table.concat(parts, ', ') .. ' (the gem does nothing until that is met)'
+						end
 						t_insert(candidates, c)
 					end
 				end
@@ -166,7 +258,7 @@ handlers.suggest_gems = function(params)
 		for _, c in ipairs(current) do if c.gem == target then targetName = c.name end end
 		return { ok = true, group = groupIndex, skill = skillName, baseDps = baseDps, manaCost = baseMana, current = current,
 			mode = mode, target = target, targetName = targetName, candidates = candidates, playstyle = playstyle, tried = tried, better = better,
-			levelUps = levelUps, characterLevel = charLevel,
+			levelUps = levelUps, characterLevel = charLevel, assumed = #assumed > 0 and assumed or nil, unsetCounts = #unsetCounts > 0 and unsetCounts or nil,
 			assumptions = assumptions() }
 	end)
 end

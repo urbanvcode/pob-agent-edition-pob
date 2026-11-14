@@ -63,6 +63,8 @@ local function metrics(o)
 	m.miss.Chaos = num(o.MissingChaosResist) or 0
 	m.res = {}
 	for _, k in ipairs({ 'Fire', 'Cold', 'Lightning', 'Chaos' }) do m.res[k] = num(o[k .. 'Resist']) or 0 end
+	m.attr = {}
+	for _, a in ipairs({ 'Str', 'Dex', 'Int' }) do m.attr[a], m.attr['Req' .. a] = num(o[a]) or 0, num(o['Req' .. a]) or 0 end
 	return m
 end
 
@@ -78,6 +80,8 @@ local function gainOf(base, m)
 		local d = (m.res[k] or 0) - (base.res[k] or 0)
 		if m_abs(d) >= 1 then g.res[k:lower()] = d end
 	end
+	-- Attribute requirements the change leaves unmet (a gem then does nothing in game).
+	if m.attr and base.attr and handlers.attribute_short then g.attrShort = handlers.attribute_short(m.attr, base.attr) end
 	return g
 end
 
@@ -181,6 +185,24 @@ handlers.optimise = function(params)
 				if not r then error(err) end
 			end
 		end
+		-- Count settings PoB leaves at 0 for a socketed gem (Trinity's resonance): measure the
+		-- whole run with a realistic value, or that gem looks worthless and swapping it out looks good.
+		local assumedCounts, unsetCounts = {}, {}
+		do
+			local okC, gaps = pcall(handlers.skill_count_gaps)
+			for _, gap in ipairs(okC and type(gaps) == 'table' and gaps.list or {}) do
+				if gap.value then
+					local before = metrics(recalc())
+					local r = Ops.set_config({ [gap.var] = gap.value })
+					if r and r.applied and r.applied[gap.var] then
+						tempConfig[gap.var] = gap.value
+						t_insert(assumedCounts, { gap = gap, gain = gainOf(before, metrics(recalc())) })
+					end
+				else
+					t_insert(unsetCounts, { var = gap.var, label = gap.label, skill = gap.skill })
+				end
+			end
+		end
 		local baseOut = recalc()
 		local base = metrics(baseOut)
 		local calc = build.calcsTab:GetMiscCalculator()
@@ -191,6 +213,11 @@ handlers.optimise = function(params)
 		local function counted(lever) evaluated[lever] = (evaluated[lever] or 0) + 1; evaluated.total = evaluated.total + 1 end
 
 		local suggestions, undercount, blocked = {}, {}, {}
+		for _, a in ipairs(assumedCounts) do
+			t_insert(undercount, { lever = 'config', key = a.gap.var, assumed = a.gap.value, skill = a.gap.skill,
+				text = string.format('%s: %s is 0 in PoB (%s); this run assumed %s, set it to what you hold in fights', a.gap.skill, a.gap.label, a.gap.note or 'not set', tostring(a.gap.value)),
+				gain = a.gain, score = 1e6 + scoreOf(a.gain, w), ops = { { op = 'config', values = { [a.gap.var] = a.gap.value } } } })
+		end
 		local seen = {}
 		local defenceGoal = (w.ehp or 0) > 0
 		local function add(lever, text, g, units, extra)
@@ -206,8 +233,13 @@ handlers.optimise = function(params)
 			end
 			if (w.st or 0) + (w.dps or 0) == 0 and m_min(g.stPct, g.dpsPct) < -1 then t_insert(warn, string.format('costs %.1f%% DPS', -m_min(g.stPct, g.dpsPct))) end
 			if g.resFixed < -0.5 then t_insert(warn, 'leaves a resistance under its cap') end
+			if g.attrShort then
+				for _, a in ipairs(g.attrShort) do
+					t_insert(warn, string.format('needs %d %s, you have %d (%d short): get it from gear or passives first, the gain only counts once it is met', a.need, a.attr, a.have, a.short))
+				end
+			end
 			local c = { lever = lever, text = text, gain = g, score = s, units = units, value = s / m_max(units, 0.5), mechanic = LEVER_MECHANIC[lever],
-				sideEffects = #warn > 0 and warn or nil }
+				sideEffects = #warn > 0 and warn or nil, attrShort = g.attrShort, unusable = g.attrShort and true or nil }
 			for k, v in pairs(extra or {}) do c[k] = v end
 			t_insert(suggestions, c)
 			return c
@@ -363,10 +395,14 @@ handlers.optimise = function(params)
 				evaluated.gems = (evaluated.gems or 0) + (gres.tried or 0)
 				evaluated.total = evaluated.total + (gres.tried or 0)
 				-- suggest_gems measures combined/full DPS; that number stands in for the goal's DPS measure.
-				local function gemGain(pct) return { stPct = pct, dpsPct = pct, ehpPct = 0, hitPct = 0, msPct = 0, areaPct = 0, life = 0, res = {}, resFixed = 0 } end
-				for i, c in ipairs(gres.candidates or {}) do
-					if i <= 3 and c.dpsPct > 0.5 and gres.target then
-						add('gem', 'Swap ' .. tostring(gres.targetName) .. ' for ' .. c.name .. ' in ' .. tostring(gres.skill), gemGain(c.dpsPct), 1,
+				local function gemGain(pct, attrShort) return { stPct = pct, dpsPct = pct, ehpPct = 0, hitPct = 0, msPct = 0, areaPct = 0, life = 0, res = {}, resFixed = 0, attrShort = attrShort } end
+				-- Up to 3 swaps the character can use, and up to 2 that need more attributes first.
+				local usable, short = 0, 0
+				for _, c in ipairs(gres.candidates or {}) do
+					local fits = not c.attrShort
+					if c.dpsPct > 0.5 and gres.target and ((fits and usable < 3) or (not fits and short < 2)) then
+						if fits then usable = usable + 1 else short = short + 1 end
+						add('gem', 'Swap ' .. tostring(gres.targetName) .. ' for ' .. c.name .. ' in ' .. tostring(gres.skill), gemGain(c.dpsPct, c.attrShort), 1,
 							{ name = c.name, warning = c.warning, group = gres.group,
 							  ops = { { op = 'remove_gem', group = gres.group, gem = gres.target }, { op = 'add_gem', group = gres.group, name = c.name, level = c.level, quality = 20 } },
 							  cost = { buy = c.name, awakened = c.awakened } })
@@ -381,12 +417,13 @@ handlers.optimise = function(params)
 			local group = build.skillsTab.socketGroupList[groupIndex]
 			for i, gem in ipairs(group and group.gemList or {}) do
 				if gem.gemData and gem.enabled ~= false and (gem.quality or 0) < 20 and (evaluated['gem quality'] or 0) < 6 then
+					local quality = gem.quality or 0 -- read first: the trial changes this gem object (restore builds new ones)
 					local m = trial('gem quality', { { op = 'gem', group = groupIndex, gem = i, quality = 20 } })
 					if m then
 						local g = gainOf(base, m)
 						if scoreOf(g, w) > 0.3 then
-							add('gem quality', 'Quality ' .. (gem.nameSpec or '?') .. ' ' .. (gem.quality or 0) .. '% -> 20%', g, 1,
-								{ ops = { { op = 'gem', group = groupIndex, gem = i, quality = 20 } }, cost = { buy = "Gemcutter's Prism", count = math.ceil((20 - (gem.quality or 0)) / 5) } })
+							add('gem quality', 'Quality ' .. (gem.nameSpec or '?') .. ' ' .. quality .. '% -> 20%', g, 1,
+								{ ops = { { op = 'gem', group = groupIndex, gem = i, quality = 20 } }, cost = { buy = "Gemcutter's Prism", count = math.ceil((20 - quality) / 5) } })
 						end
 					end
 				end
@@ -587,7 +624,12 @@ handlers.optimise = function(params)
 		-- Rank: gain per cost (points, regret orbs, or 1 for a one-off change).
 		local ranked = {}
 		for _, s in ipairs(suggestions) do if s.score > 0.05 then t_insert(ranked, s) end end
-		t_sort(ranked, function(a, b) if a.value ~= b.value then return a.value > b.value end return a.score > b.score end)
+		-- Changes the character cannot use yet (attributes short) go after the ones it can.
+		t_sort(ranked, function(a, b)
+			if (a.unusable or false) ~= (b.unusable or false) then return not a.unusable end
+			if a.value ~= b.value then return a.value > b.value end
+			return a.score > b.score
+		end)
 		local total = #ranked
 		while #ranked > limit do table.remove(ranked) end
 		return {
@@ -595,6 +637,7 @@ handlers.optimise = function(params)
 			tempConfig = tempConfig, assumptions = assumptions(), mainSkill = mainSkillName(),
 			base = { singleTargetDps = base.st, dps = base.dps, ehp = base.ehp, weakestHit = base.hit, movementSpeed = base.ms, life = base.life, missingRes = base.miss },
 			suggestions = ranked, more = total - #ranked, undercount = undercount, blocked = blocked, scaling = scaling,
+			unsetCounts = #unsetCounts > 0 and unsetCounts or nil,
 			pointsFree = pointsFree, maxPoints = maxPoints, evaluated = evaluated,
 		}
 	end)
