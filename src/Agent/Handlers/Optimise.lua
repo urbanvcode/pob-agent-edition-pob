@@ -136,7 +136,7 @@ end
 
 local UTILITY_FLASKS = { 'Diamond Flask', 'Granite Flask', 'Jade Flask', 'Quartz Flask', 'Silver Flask', 'Basalt Flask',
 	'Bismuth Flask', 'Amethyst Flask', 'Ruby Flask', 'Sapphire Flask', 'Topaz Flask', 'Sulphur Flask', 'Stibnite Flask',
-	'Aquamarine Flask', 'Corundum Flask', 'Quicksilver Flask' }
+	'Aquamarine Flask', 'Corundum Flask', 'Quicksilver Flask', 'Gold Flask' }
 
 -- Standard stat lines for the scaling report: what one more step of each is worth.
 local SCALING = {
@@ -402,10 +402,15 @@ handlers.optimise = function(params)
 					local fits = not c.attrShort
 					if c.dpsPct > 0.5 and gres.target and ((fits and usable < 3) or (not fits and short < 2)) then
 						if fits then usable = usable + 1 else short = short + 1 end
-						add('gem', 'Swap ' .. tostring(gres.targetName) .. ' for ' .. c.name .. ' in ' .. tostring(gres.skill), gemGain(c.dpsPct, c.attrShort), 1,
-							{ name = c.name, warning = c.warning, group = gres.group,
+						local sw = add('gem', 'Swap ' .. tostring(gres.targetName) .. ' for ' .. c.name .. ' in ' .. tostring(gres.skill), gemGain(c.dpsPct, c.attrShort), 1,
+							{ name = c.name, warning = c.warning, group = gres.group, uncounted = gres.targetCaveat,
 							  ops = { { op = 'remove_gem', group = gres.group, gem = gres.target }, { op = 'add_gem', group = gres.group, name = c.name, level = c.level, quality = 20 } },
 							  cost = { buy = c.name, awakened = c.awakened } })
+						if sw and gres.targetCaveat then
+							sw.sideEffects = sw.sideEffects or {}
+							t_insert(sw.sideEffects, gres.targetCaveat)
+							sw.caveat = true
+						end
 					end
 				end
 				for _, u in ipairs(gres.levelUps or {}) do
@@ -469,15 +474,24 @@ handlers.optimise = function(params)
 			while #blocked > 4 do table.remove(blocked) end
 		end
 
-		-- 6. Flasks: equipped flasks switched off (under-counting), utility flasks in an empty slot.
+		-- 6. Flasks: equipped flasks switched off (under-counting), then utility flasks in an empty
+		--    slot or, with all five slots full, in place of the flask that does least for this goal
+		--    (never the last life flask; mana and life recovery are not in the score, so an extra
+		--    life flask goes first and a mana flask last among equals).
 		if want.flasks then
 			local set = build.itemsTab.activeItemSet
 			local emptySlot
+			local worn, equipped, lifeFlasks = {}, {}, 0
 			for i = 1, 5 do
 				local slotName = 'Flask ' .. i
 				local slot = build.itemsTab.slots[slotName]
 				local item = slot and slot.selItemId and slot.selItemId > 0 and build.itemsTab.items[slot.selItemId]
 				if item then
+					local kind = item.base and item.base.subType or 'Utility'
+					if kind == 'Life' or kind == 'Hybrid' then lifeFlasks = lifeFlasks + 1 end
+					if item.baseName then worn[item.baseName] = true end
+					local active = not (set and set[slotName] and set[slotName].active == false)
+					t_insert(equipped, { index = i, item = item, kind = kind, active = active })
 					if set and set[slotName] and not set[slotName].active then
 						local m = trial('flasks', { { op = 'flask', index = i, active = true } })
 						if m then
@@ -492,12 +506,35 @@ handlers.optimise = function(params)
 					emptySlot = i
 				end
 			end
-			if emptySlot then
+			local targetSlot, replaced = emptySlot, nil
+			if not targetSlot then
+				local options = {}
+				for _, f in ipairs(equipped) do
+					local isLife = f.kind == 'Life' or f.kind == 'Hybrid'
+					if not (isLife and lifeFlasks <= 1) then
+						local loss = 0
+						if f.active then
+							local m = trial('flasks', { { op = 'flask', index = f.index, active = false } })
+							loss = m and -scoreOf(gainOf(base, m), w) or 0
+						end
+						t_insert(options, { f = f, loss = loss, order = isLife and 0 or (f.kind == 'Mana' and 2 or 1) })
+					end
+				end
+				t_sort(options, function(a, b)
+					if m_abs(a.loss - b.loss) > 0.3 then return a.loss < b.loss end
+					return a.order < b.order
+				end)
+				if options[1] then
+					targetSlot = options[1].f.index
+					replaced = { name = options[1].f.item.title or options[1].f.item.name or options[1].f.item.baseName or ('Flask ' .. targetSlot), kind = options[1].f.kind, loss = options[1].loss }
+				end
+			end
+			if targetSlot then
 				local tries = {}
 				for _, baseName in ipairs(UTILITY_FLASKS) do
 					local b = data.itemBases[baseName]
-					if b and (not b.req or (b.req.level or 0) <= charLevel) then
-						local ops = { { op = 'equip', slot = 'Flask ' .. emptySlot, text = 'Rarity: NORMAL\n' .. baseName }, { op = 'flask', index = emptySlot, active = true } }
+					if b and not worn[baseName] and (not b.req or (b.req.level or 0) <= charLevel) then
+						local ops = { { op = 'equip', slot = 'Flask ' .. targetSlot, text = 'Rarity: NORMAL\n' .. baseName }, { op = 'flask', index = targetSlot, active = true } }
 						local m = trial('flasks', ops)
 						if m then
 							local g = gainOf(base, m)
@@ -506,9 +543,15 @@ handlers.optimise = function(params)
 					end
 				end
 				t_sort(tries, function(a, b) return a.score > b.score end)
-				for i = 1, m_min(2, #tries) do
-					add('flask', tries[i].name .. ' in the empty Flask ' .. emptySlot .. ' slot (plain base, no mods)', tries[i].gain, 1,
-						{ name = tries[i].name, ops = tries[i].ops, cost = { buy = tries[i].name } })
+				for i = 1, m_min(replaced and 3 or 2, #tries) do
+					local where = replaced and (' in place of ' .. replaced.name .. ' (Flask ' .. targetSlot .. ', plain base, no mods)')
+						or (' in the empty Flask ' .. targetSlot .. ' slot (plain base, no mods)')
+					local c = add('flask', tries[i].name .. where, tries[i].gain, 1,
+						{ name = tries[i].name, ops = tries[i].ops, cost = { buy = tries[i].name }, replaces = replaced and replaced.name })
+					if c and replaced and (replaced.kind == 'Mana' or replaced.kind == 'Life' or replaced.kind == 'Hybrid') then
+						c.sideEffects = c.sideEffects or {}
+						t_insert(c.sideEffects, 'loses a ' .. replaced.kind:lower() .. ' flask: its recovery is not in this score, check your ' .. (replaced.kind == 'Mana' and 'mana' or 'life') .. ' sustain')
+					end
 				end
 			end
 		end
@@ -624,9 +667,11 @@ handlers.optimise = function(params)
 		-- Rank: gain per cost (points, regret orbs, or 1 for a one-off change).
 		local ranked = {}
 		for _, s in ipairs(suggestions) do if s.score > 0.05 then t_insert(ranked, s) end end
-		-- Changes the character cannot use yet (attributes short) go after the ones it can.
+		-- Changes the character cannot use yet (attributes short), and swaps that remove a gem PoB
+		-- counts as 0 (the loss is not measured), go after the clean ones.
 		t_sort(ranked, function(a, b)
-			if (a.unusable or false) ~= (b.unusable or false) then return not a.unusable end
+			local la, lb = (a.unusable or a.caveat) and true or false, (b.unusable or b.caveat) and true or false
+			if la ~= lb then return not la end
 			if a.value ~= b.value then return a.value > b.value end
 			return a.score > b.score
 		end)

@@ -86,6 +86,15 @@ handlers.attribute_short = function(o, baseOut)
 	return attributeShort(o, baseOut)
 end
 
+-- Supports whose main effect PoB does not put into the DPS it reports, so taking them
+-- out looks free. Checked against PoB's data: Returning Projectiles' "less damage" and
+-- pierce only apply under Condition ReturningProjectile (SkillStatMap), and the returning
+-- hit is not added to the skill's DPS.
+local UNMEASURED_SUPPORTS = {
+	['returning projectiles'] = 'PoB does not count the returning hit, so the DPS it adds is not measured',
+}
+handlers.unmeasured_support = function(name) return type(name) == 'string' and UNMEASURED_SUPPORTS[name:lower()] or nil end
+
 -- Support gems ---------------------------------------------------------------
 -- params: { group?, replace? (gem number), add? (bool), awakened? (default true), limit? }
 -- 1. What each current support is worth (DPS lost when it is switched off).
@@ -168,7 +177,9 @@ handlers.suggest_gems = function(params)
 				gem.enabled = false
 				local dps = measure()
 				gem.enabled = true
-				t_insert(current, { gem = i, name = name, level = gem.level, quality = gem.quality, lossPct = -pctChange(dps, baseDps) })
+				local loss = -pctChange(dps, baseDps)
+				t_insert(current, { gem = i, name = name, level = gem.level, quality = gem.quality, lossPct = loss,
+					unmeasured = UNMEASURED_SUPPORTS[name:lower()], zero = loss < 0.5 or nil })
 			end
 		end
 		table.sort(levelUps, function(a, b) return a.dpsPct > b.dpsPct end)
@@ -182,8 +193,11 @@ handlers.suggest_gems = function(params)
 				local found
 				for _, c in ipairs(current) do if c.gem == target then found = c end end
 				if not found then error('gem ' .. target .. ' in group ' .. groupIndex .. ' is not an active support gem') end
-			elseif current[1] then
-				target = current[1].gem
+			else
+				-- The weakest support PoB can measure: one it does not count (Returning Projectiles)
+				-- only looks weakest, and swapping it out would hide a real loss.
+				for _, c in ipairs(current) do if not c.unmeasured then target = c.gem break end end
+				if not target and current[1] then target = current[1].gem end
 			end
 			if target then mode = 'replace' end
 		end
@@ -254,10 +268,16 @@ handlers.suggest_gems = function(params)
 			end
 		end
 		candidates = normal
-		local targetName
-		for _, c in ipairs(current) do if c.gem == target then targetName = c.name end end
+		local targetName, targetCaveat
+		for _, c in ipairs(current) do
+			if c.gem == target then
+				targetName = c.name
+				if c.unmeasured then targetCaveat = 'PoB counts ' .. c.name .. ' as 0: ' .. c.unmeasured .. '; the real loss from removing it is not in these numbers'
+				elseif c.zero then targetCaveat = 'PoB counts ' .. c.name .. ' as 0 for this skill: check it really does nothing for you (an effect PoB does not model, such as returning or chaining hits, would be lost)' end
+			end
+		end
 		return { ok = true, group = groupIndex, skill = skillName, baseDps = baseDps, manaCost = baseMana, current = current,
-			mode = mode, target = target, targetName = targetName, candidates = candidates, playstyle = playstyle, tried = tried, better = better,
+			mode = mode, target = target, targetName = targetName, targetCaveat = targetCaveat, candidates = candidates, playstyle = playstyle, tried = tried, better = better,
 			levelUps = levelUps, characterLevel = charLevel, assumed = #assumed > 0 and assumed or nil, unsetCounts = #unsetCounts > 0 and unsetCounts or nil,
 			assumptions = assumptions() }
 	end)
