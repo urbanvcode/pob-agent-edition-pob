@@ -120,7 +120,7 @@ end
 local LEVER_MECHANIC = {
 	anoint = 'Anoint', flask = 'Flask', pantheon = 'Pantheon', bandit = 'Bandit quest', gem = 'Support gem',
 	['gem level'] = 'Skill gem', ['gem quality'] = 'Quality', aura = 'Aura', herald = 'Aura', curse = 'Curse',
-	mastery = 'Mastery', respec = 'Passive skill tree',
+	mastery = 'Mastery', respec = 'Passive skill tree', ascendancy = 'Ascendancy',
 }
 
 -- Gem level a character of this level can use (same rule as suggest_gems).
@@ -270,11 +270,15 @@ handlers.optimise = function(params)
 		local gemLevels = {}
 
 		-- 2. Passives within N points (notables, keystones, masteries) with their path.
-		local additions = {}
+		--    Ascendancy nodes are measured too but kept apart (ascAdditions): they cost
+		--    Labyrinth points, never passive points, and are no respec target.
+		local additions, ascAdditions = {}, {}
+		local ascInfo = want.passives and handlers.ascendancy_points and handlers.ascendancy_points() or nil
 		if want.passives or want.respec then
 			passiveOptions(maxPoints, function(node, pathNodes, points, name, stats, extra)
+				if extra and extra.ascendancy and not want.passives then return end
 				if (evaluated.passives or 0) >= 300 then return end
-				local m = miscTrial('passives', { addNodes = pathNodes })
+				local m = miscTrial(extra and extra.ascendancy and 'ascendancy' or 'passives', { addNodes = pathNodes })
 				if not m then return end
 				local g = gainOf(base, m)
 				local s = scoreOf(g, w)
@@ -282,8 +286,8 @@ handlers.optimise = function(params)
 				for p in pairs(pathNodes) do ids[p.id] = true end
 				local op = extra and extra.effect and { op = 'mastery', node = node.id, effect = extra.effect } or { op = 'alloc', node = node.id }
 				local a = { node = node, name = name, points = points, stats = stats, gain = g, score = s, pathNodes = pathNodes, ids = ids,
-					type = extra and extra.effect and 'Mastery' or node.type, effect = extra and extra.effect, op = op }
-				t_insert(additions, a)
+					type = extra and extra.effect and 'Mastery' or node.type, effect = extra and extra.effect, op = op, via = extra and extra.via }
+				t_insert(extra and extra.ascendancy and ascAdditions or additions, a)
 			end)
 			if want.passives then
 				t_sort(additions, function(a, b) return a.score / a.points > b.score / b.points end)
@@ -291,9 +295,28 @@ handlers.optimise = function(params)
 				for _, a in ipairs(additions) do
 					if a.score > 0.05 and n < 8 then
 						n = n + 1
+						-- points = PoB's pathDist: the node itself plus every unallocated node on the way.
 						add(a.type == 'Mastery' and 'mastery' or 'passive', a.name .. (a.type == 'Keystone' and ' (keystone)' or ''), a.gain, a.points,
 							{ id = a.node.id, effect = a.effect, points = a.points, stats = a.stats, kind = a.type, ops = { a.op },
-							  cost = { points = a.points, free = pointsFree >= a.points or nil } })
+							  cost = { points = a.points, path = a.points > 1 or nil, via = a.via, free = pointsFree >= a.points or nil } })
+					end
+				end
+				-- Ascendancy: ranked on their own, only while points are left of the 8.
+				-- add() puts each into suggestions (hardcore and side-effect rules apply);
+				-- it is taken straight back out into the ascendancy list.
+				if ascInfo and ascInfo.left > 0 and #ascAdditions > 0 then
+					t_sort(ascAdditions, function(a, b) return a.score / a.points > b.score / b.points end)
+					ascInfo.suggestions = {}
+					for _, a in ipairs(ascAdditions) do
+						if a.score > 0.05 and #ascInfo.suggestions < 4 then
+							local c = add('ascendancy', a.name, a.gain, a.points,
+								{ id = a.node.id, points = a.points, stats = a.stats, kind = a.type, ops = { a.op }, ascendancyName = a.node.ascendancyName,
+								  cost = { ascendancy = a.points, path = a.points > 1 or nil, via = a.via } })
+							if c and suggestions[#suggestions] == c then
+								table.remove(suggestions)
+								if c.score > 0.05 then t_insert(ascInfo.suggestions, c) end
+							end
+						end
 					end
 				end
 			end
@@ -688,7 +711,7 @@ handlers.optimise = function(params)
 			tempConfig = tempConfig, assumptions = assumptions(), mainSkill = mainSkillName(),
 			base = { singleTargetDps = base.st, dps = base.dps, ehp = base.ehp, weakestHit = base.hit, movementSpeed = base.ms, life = base.life, missingRes = base.miss },
 			suggestions = ranked, gemLevels = gemLevels, more = total - #ranked, undercount = undercount, blocked = blocked, scaling = scaling,
-			unsetCounts = #unsetCounts > 0 and unsetCounts or nil,
+			unsetCounts = #unsetCounts > 0 and unsetCounts or nil, ascendancy = ascInfo,
 			pointsFree = pointsFree, maxPoints = maxPoints, evaluated = evaluated,
 		}
 	end)

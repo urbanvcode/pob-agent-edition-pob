@@ -830,27 +830,76 @@ handlers.suggest_passives = function(params)
 		end
 	end
 	passiveOptions(maxPoints, consider)
-	table.sort(candidates, function(a, b) if a.value ~= b.value then return a.value > b.value end return a.score > b.score end)
+	-- Ascendancy nodes are paid with Labyrinth points: their own list, never mixed with passive points.
+	local passives, ascendancy = {}, {}
+	for _, c in ipairs(candidates) do t_insert(c.ascendancy and ascendancy or passives, c) end
+	local function byValue(a, b) if a.value ~= b.value then return a.value > b.value end return a.score > b.score end
+	table.sort(passives, byValue)
+	table.sort(ascendancy, byValue)
 	local limit = m_min(m_max(tonumber(params.limit) or 10, 1), 30)
-	while #candidates > limit do table.remove(candidates) end
+	while #passives > limit do table.remove(passives) end
+	while #ascendancy > 4 do table.remove(ascendancy) end
 	local tree = treeSummary()
-	return { ok = true, suggestions = candidates, evaluated = evaluated, focus = focus, maxPoints = maxPoints,
-		pointsFree = tree.pointsAtLevel - tree.pointsUsed, assumptions = assumptions() }
+	return { ok = true, suggestions = passives, ascendancy = #ascendancy > 0 and ascendancy or nil, ascendancyInfo = handlers.ascendancy_points(),
+		evaluated = evaluated, focus = focus, maxPoints = maxPoints, pointsFree = tree.pointsAtLevel - tree.pointsUsed, assumptions = assumptions() }
+end
+
+-- Ascendancy points: allocated / left (PoB counts at most 8) and where the next
+-- ones come from, from the levelling data (poewiki, quoted): 2 per Labyrinth,
+-- first completion, Normal -> Cruel -> Merciless -> Eternal. PoB does not know
+-- which labs the character has done, so "next" assumes allocated = earned.
+local levellingData
+handlers.ascendancy_points = function()
+	local used = select(2, build.spec:CountAllocNodes())
+	local out = { used = used, left = m_max(8 - used, 0), max = 8, level = tonumber(build.characterLevel) or 1 }
+	if not levellingData then
+		local okLoad, d = pcall(LoadModule, 'Agent/LevellingData')
+		levellingData = okLoad and type(d) == 'table' and d or false
+	end
+	local facts = levellingData and levellingData.facts
+	if facts and facts.labs then
+		-- Labs give points in pairs: an odd count means a lab's second point is earned but unspent.
+		local earned = 0
+		for _, lab in ipairs(facts.labs) do
+			earned = earned + (lab.points or 2)
+			if used < earned then
+				if earned - used == 1 then out.unspent = 1
+				else
+					out.nextLab = { name = lab.name, minLevel = lab.minLevel, quote = lab.quote, maps = lab.maps or nil }
+					break
+				end
+			end
+		end
+		local src = levellingData.sources and levellingData.sources.lab
+		out.source = src and { title = src.title, url = src.url, retrieved = src.retrieved, outdated = src.outdated or nil, version = levellingData.gameVersion } or nil
+		out.rule = facts.labPoints and facts.labPoints.quote or nil
+	end
+	return out
 end
 
 -- Every passive option within maxPoints: nearby notables, keystones, first small
--- passives and ascendancy nodes (with their path), and each free effect of a
--- reachable mastery. consider(node, pathNodes, points, name, stats, extra).
+-- passives (with their path), and each free effect of a reachable mastery.
+-- Ascendancy nodes come too, flagged extra.ascendancy: they cost ascendancy points
+-- (Labyrinth), not passive points, so their path is limited by the ascendancy
+-- points left (8 minus allocated, PoB's CountAllocNodes) instead of maxPoints.
+-- consider(node, pathNodes, points, name, stats, extra).
 passiveOptions = function(maxPoints, consider)
 	local spec = build.spec
-	local ascendancyUsed = select(2, spec:CountAllocNodes())
+	local ascendancyLeft = 8 - select(2, spec:CountAllocNodes())
 	for id, node in pairs(spec.nodes) do
-		if not node.alloc and node.path and node.pathDist and node.pathDist <= maxPoints and Ops.is_allocatable(node) and node.modKey ~= ''
-			and not (node.ascendancyName and ascendancyUsed + node.pathDist > 8) then
-			if node.type == 'Notable' or node.type == 'Keystone' or (node.type == 'Normal' and (node.pathDist == 1 or node.ascendancyName)) then
-				local pathNodes = {}
-				for _, p in ipairs(node.path) do pathNodes[p] = true end
-				consider(node, pathNodes, node.pathDist, node.dn or node.name, node.sd)
+		local limit = node.ascendancyName and ascendancyLeft or maxPoints
+		if not node.alloc and node.path and node.pathDist and node.pathDist <= limit and Ops.is_allocatable(node) and node.modKey ~= '' then
+			local pathNodes, via = {}, {}
+			for _, p in ipairs(node.path) do
+				pathNodes[p] = true
+				if p ~= node and (p.type == 'Notable' or p.type == 'Keystone') then t_insert(via, p.dn or p.name) end
+			end
+			local viaNotable = #via > 0
+			-- A small ascendancy node is only its own option when its path takes no notable
+			-- (otherwise its gain is that notable's, which is listed by itself).
+			if node.type == 'Notable' or node.type == 'Keystone' or (node.type == 'Normal' and (node.pathDist == 1 or (node.ascendancyName and not viaNotable))) then
+				consider(node, pathNodes, node.pathDist, node.dn or node.name, node.sd,
+					(node.ascendancyName or viaNotable) and { ascendancy = node.ascendancyName and true or nil, via = viaNotable and via or nil } or nil)
 			end
 		end
 		if node.type == 'Mastery' and node.masteryEffects and node.path and (node.alloc or (node.pathDist or 99) <= maxPoints) then
