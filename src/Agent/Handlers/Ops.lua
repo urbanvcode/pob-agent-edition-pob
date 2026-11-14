@@ -606,10 +606,13 @@ function M.set_config(params)
       local alias = LEGACY_BOSS_ALIASES[value:lower()]
       if alias then value = alias end
     end
-    -- enemyLevel lives on the tab itself, not in the input table.
+    -- enemyLevel: PoB's ConfigTab:UpdateLevel() (run by every BuildModList) recomputes
+    -- configTab.enemyLevel from input.enemyLevel, else the boss placeholder, else the
+    -- character level, so the value must go into the input table too or it is lost.
     if key == 'enemyLevel' then
       local n = tonumber(value)
       if n then
+        input.enemyLevel = n
         build.configTab.enemyLevel = n
         applied[key] = n
         changed = true

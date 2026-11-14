@@ -40,6 +40,34 @@ local function measure(o)
 	}
 end
 
+-- The player's own enemy settings (custom hit damage, a boss skill preset, a fixed damage
+-- type) would replace PoB's generic boss model, so a "map boss" would hit like that skill.
+-- They are cleared for the check (simulate() puts them back); `overridden` lists them.
+local DAMAGE_KEYS = { 'enemyPhysicalDamage', 'enemyFireDamage', 'enemyColdDamage', 'enemyLightningDamage', 'enemyChaosDamage' }
+local function neutralEnemy()
+	local input, cleared = build.configTab.input, {}
+	for _, k in ipairs(DAMAGE_KEYS) do
+		if input[k] ~= nil then t_insert(cleared, k); input[k] = nil end
+	end
+	if input.presetBossSkills and input.presetBossSkills ~= 'None' then t_insert(cleared, 'presetBossSkills (' .. tostring(input.presetBossSkills) .. ')'); input.presetBossSkills = 'None' end
+	if input.enemyDamageType and input.enemyDamageType ~= 'Average' then t_insert(cleared, 'enemyDamageType (' .. tostring(input.enemyDamageType) .. ')'); input.enemyDamageType = 'Average' end
+	return cleared
+end
+
+-- The hit PoB's enemy model uses now, per damage type (the boss presets set these as placeholders).
+local function enemyHit()
+	local hit, total = {}, 0
+	local controls = build.configTab.varControls or {}
+	for _, t in ipairs(TYPES) do
+		local key = 'enemy' .. t .. 'Damage'
+		local c = controls[key]
+		local v = tonumber(build.configTab.input[key]) or (c and tonumber(c.placeholder)) or 0
+		hit[t] = m_floor(v); total = total + v
+	end
+	hit.total = m_floor(total)
+	return hit
+end
+
 local function set(values)
 	local r, err = Ops.set_config(values)
 	if not r then error(err) end
@@ -60,6 +88,8 @@ handlers.farming_check = function(params)
 	local levels = type(params.levels) == 'table' and params.levels or { 68, 73, 78, 83 }
 	return simulate(function()
 		local base = measure()
+		local assumed = assumptions() -- the player's own config, before the checks change it
+		local overridden = neutralEnemy()
 		local clear = set({ enemyIsBoss = 'None' })
 		local tiers = {}
 		for _, level in ipairs(levels) do
@@ -67,7 +97,9 @@ handlers.farming_check = function(params)
 			if level then
 				local packs = set({ enemyIsBoss = 'None', enemyLevel = level })
 				local boss = set({ enemyIsBoss = 'Boss', enemyLevel = level })
+				local hit = enemyHit()
 				t_insert(tiers, {
+					bossHit = hit,
 					level = level, monsterLife = data.monsterLifeTable[level],
 					clearDps = packs.dps, bossDps = boss.dps, hits = boss.hits, packHits = packs.hits,
 					maxHit = boss.maxHit, maxHitType = boss.maxHitType, enemyDamage = boss.enemyDamage, ehp = boss.ehp,
@@ -116,7 +148,7 @@ handlers.farming_check = function(params)
 		return {
 			ok = true, base = base, clear = clear, tiers = tiers, pinnacle = pinnacle, uber = uber, mods = mods,
 			life = num(o.Life), energyShield = num(o.EnergyShield), resists = res, level = tonumber(build.characterLevel),
-			mainSkill = mainSkillName(), assumptions = assumptions(),
+			mainSkill = mainSkillName(), assumptions = assumed, overridden = #overridden > 0 and overridden or nil,
 		}
 	end)
 end
