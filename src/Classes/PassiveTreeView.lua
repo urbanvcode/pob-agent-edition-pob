@@ -1154,6 +1154,12 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 		end
 	end
 
+	-- Agent Edition: labelled boxes next to the changed nodes (Agent/TreePlanPanel.lua)
+	if self.compareSpec and self.compareLabels then
+		self.compareLabels.draw(self.compareLabels, spec, self.compareSpec, treeToScreen, scale, viewPort)
+		SetDrawLayer(nil, 25)
+	end
+
 	-- Draw ring overlays for jewel sockets
 	local function drawJewelRadius(jewel, scrX, scrY, tint)
 		-- Abyss jewels do not show radius art in game.
@@ -1316,6 +1322,17 @@ function PassiveTreeViewClass:Focus(x, y, viewPort, build)
 	local tree = build.spec.tree
 	local scale = m_min(viewPort.width, viewPort.height) / tree.size * self.zoom
 	
+	self.zoomX = -x * scale
+	self.zoomY = -y * scale
+end
+
+-- Agent Edition: centre on a point without zooming all the way in (changes panel rows)
+function PassiveTreeViewClass:CentreOn(x, y, viewPort, build)
+	if self.zoomLevel < 5 then
+		self.zoomLevel = 5
+		self.zoom = 1.2 ^ self.zoomLevel
+	end
+	local scale = m_min(viewPort.width, viewPort.height) / build.spec.tree.size * self.zoom
 	self.zoomX = -x * scale
 	self.zoomY = -y * scale
 end

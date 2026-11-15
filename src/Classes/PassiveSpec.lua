@@ -103,6 +103,14 @@ function PassiveSpecClass:Load(xml, dbFileName)
 					return true
 				end
 				url = node[1]
+			elseif node.elem == "AgentNotes" then
+				-- Agent Edition: the AI's notes on nodes
+				self.agentNotes = { }
+				for _, child in ipairs(node) do
+					if type(child) == "table" and child.elem == "Note" and tonumber(child.attrib.nodeId) and type(child[1]) == "string" then
+						self.agentNotes[tonumber(child.attrib.nodeId)] = child[1]
+					end
+				end
 			elseif node.elem == "Sockets" then
 				for _, child in ipairs(node) do
 					if child.elem == "Socket" then
@@ -235,6 +243,14 @@ function PassiveSpecClass:Save(xml)
 	end
 	t_insert(xml, overrides)
 
+	-- Agent Edition: one-line notes the AI left on nodes (shown in the Tree tab's compare labels)
+	if self.agentNotes and next(self.agentNotes) then
+		local notes = { elem = "AgentNotes" }
+		for nodeId, text in pairs(self.agentNotes) do
+			t_insert(notes, { elem = "Note", attrib = { nodeId = tostring(nodeId) }, [1] = tostring(text) })
+		end
+		t_insert(xml, notes)
+	end
 end
 
 function PassiveSpecClass:PostLoad()
