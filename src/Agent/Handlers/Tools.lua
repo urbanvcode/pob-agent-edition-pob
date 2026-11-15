@@ -1274,7 +1274,17 @@ end
 passiveOptions = function(maxPoints, consider)
 	local spec = build.spec
 	local ascendancyLeft = 8 - select(2, spec:CountAllocNodes())
-	for id, node in pairs(spec.nodes) do
+	-- A fixed order, ascendancy nodes first: callers stop after a few hundred trials, and
+	-- pairs() order is not stable, so the cut-off used to drop different nodes from run to run.
+	local order = {}
+	for id, node in pairs(spec.nodes) do t_insert(order, node) end
+	table.sort(order, function(a, b)
+		local aa, ba = a.ascendancyName and 0 or 1, b.ascendancyName and 0 or 1
+		if aa ~= ba then return aa < ba end
+		return a.id < b.id
+	end)
+	for _, node in ipairs(order) do
+		local id = node.id
 		local limit = node.ascendancyName and ascendancyLeft or maxPoints
 		if not node.alloc and node.path and node.pathDist and node.pathDist <= limit and Ops.is_allocatable(node) and node.modKey ~= '' then
 			local pathNodes, via = {}, {}
