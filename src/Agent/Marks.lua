@@ -448,19 +448,59 @@ local function badge(build, m, x, y, maxRight)
 	return out
 end
 
--- A click on a box: Next / Back on a tour, else dismiss the mark.
-local function click(build, hits, cx, cy)
-	local function inside(r) return r and cx >= r.x and cx < r.x + r.w and cy >= r.y and cy < r.y + r.h end
-	for m, r in pairs(hits) do
-		if inside(r.next) then
-			if build.agentTour.step >= #build.agentMarks then Marks.Clear(build) else Marks.Step(build, 1) end
-			return true
-		elseif inside(r.back) then Marks.Step(build, -1) return true
-		elseif inside(r.box) then
-			if build.agentTour then Marks.Clear(build) else Marks.Dismiss(build, m) end
-			return true
+-- Input --------------------------------------------------------------------------------
+-- The tabs handle the mouse before anything drawn over them (the Items list, dropdowns,
+-- the tree), so the marks cannot wait for their own draw call to see a click. Every
+-- clickable area drawn this frame is recorded here; Marks.HandleInput runs BEFORE the tab
+-- on the next frame (Modules/Build.lua), acts on clicks inside those areas and takes them
+-- (press and release), so the controls underneath never see them. Esc closes the marks.
+local function addHit(build, rect, action, name)
+	build.agentMarksHitsNext = build.agentMarksHitsNext or { }
+	t_insert(build.agentMarksHitsNext, { r = rect, action = action, name = name })
+end
+
+-- A mark's box: Next / Back on a tour (checked first), else a click dismisses it.
+local function addBoxHits(build, m, r)
+	if r.next then
+		addHit(build, r.next, function()
+			if build.agentTour and build.agentTour.step >= #(build.agentMarks or { }) then Marks.Clear(build) else Marks.Step(build, 1) end
+		end, "next")
+	end
+	if r.back then addHit(build, r.back, function() Marks.Step(build, -1) end, "back") end
+	addHit(build, r.box, function()
+		if build.agentTour then Marks.Clear(build) else Marks.Dismiss(build, m) end
+	end, "box")
+end
+
+-- The clickable area at a point (last frame's), or nil.
+function Marks.HitAt(build, x, y)
+	for _, h in ipairs(build.agentMarksHits or { }) do
+		local r = h.r
+		if x >= r.x and x < r.x + r.w and y >= r.y and y < r.y + r.h then return h end
+	end
+end
+
+-- Called by Build before the tab draws: clicks on marks, boxes and buttons, and Esc.
+function Marks.HandleInput(build, inputEvents)
+	local cx, cy = GetCursorPos()
+	for id, event in ipairs(inputEvents or { }) do
+		if event.type == "KeyDown" and event.key == "ESCAPE" and build.agentMarks then
+			Marks.Clear(build)
+			inputEvents[id] = nil
+		elseif event.key == "LEFTBUTTON" or event.key == "RIGHTBUTTON" or event.key == "WHEELUP" or event.key == "WHEELDOWN" then
+			local h = Marks.HitAt(build, cx, cy)
+			if h then
+				if event.type == "KeyUp" and event.key == "LEFTBUTTON" then h.action() end
+				inputEvents[id] = nil
+			end
 		end
 	end
+end
+
+-- Called by Build after the marks were drawn: this frame's areas become the next frame's.
+function Marks.EndFrame(build)
+	build.agentMarksHits = build.agentMarksHitsNext
+	build.agentMarksHitsNext = nil
 end
 
 -- Where a mark's control is on screen (Items, Skills, Configuration, Calcs), or nil.
@@ -519,8 +559,6 @@ function Marks.Draw(build, viewPort, inputEvents)
 	local list = build.agentMarks
 	if not list or #list == 0 then return end
 	SetDrawLayer(3, 0)
-	local cx, cy = GetCursorPos()
-	local hits = { }
 	local visible = Marks.Visible(build)
 	if build.viewMode ~= "TREE" then
 		for _, m in ipairs(visible) do
@@ -533,23 +571,21 @@ function Marks.Draw(build, viewPort, inputEvents)
 						local tx, ty, tw, th = controlRect(build, m, "toSlot")
 						if tx then drawStyle({ tone = "do", style = "arrow", kind = "gem" }, tx, ty, tw, th) end
 					end
-					hits[m] = badge(build, m, x + w + 12, y + h / 2 - 11, viewPort.x + viewPort.width - 4)
+					addBoxHits(build, m, badge(build, m, x + w + 12, y + h / 2 - 11, viewPort.x + viewPort.width - 4))
 				end
 			end
 		end
 	end
+	-- The buttons first: they win over a box drawn under them.
 	local buttons = buttonRow(build, viewPort)
+	local hits = build.agentMarksHitsNext or { }
+	build.agentMarksHitsNext = { }
+	addHit(build, buttons[1], function() Marks.Clear(build) end, "clear")
+	addHit(build, buttons[2], function() Marks.SetReducedMotion(not Marks.ReducedMotion()) end, "motion")
+	for _, h in ipairs(hits) do t_insert(build.agentMarksHitsNext, h) end
 	local others = { }
 	for _, m in ipairs(visible) do if m.view ~= build.viewMode then t_insert(others, m.n .. " on " .. m.view:sub(1, 1) .. m.view:sub(2):lower()) end end
-	if #others > 0 then DrawString(buttons[1].x - 8, buttons[1].y + 4, "RIGHT", 14, "VAR", "^xE69F00AI marks: " .. table.concat(others, ", ")) end
-	for id, event in ipairs(inputEvents or { }) do
-		if event.type == "KeyUp" and event.key == "LEFTBUTTON" then
-			local function on(r) return cx >= r.x and cx < r.x + r.w and cy >= r.y and cy < r.y + r.h end
-			if on(buttons[1]) then Marks.Clear(build) inputEvents[id] = nil return end
-			if on(buttons[2]) then Marks.SetReducedMotion(not Marks.ReducedMotion()) inputEvents[id] = nil return end
-			if click(build, hits, cx, cy) then inputEvents[id] = nil return end
-		end
-	end
+	if #others > 0 then DrawString(buttons[1].x - 8, buttons[1].y + 4, "RIGHT", 14, "VAR", "^xE69F00AI marks: " .. table.concat(others, ", ") .. "  ^8(Esc closes)") end
 end
 
 -- "Show AI marks again": a small button for a minute after the marks were cleared.
@@ -568,14 +604,7 @@ function Marks.DrawAgain(build, viewPort, inputEvents)
 	SetDrawColor(0.08, 0.08, 0.1)
 	DrawImage(nil, r.x + 1, r.y + 1, r.w - 2, r.h - 2)
 	DrawString(r.x + 8, r.y + 4, "LEFT", 14, "VAR", "^7" .. label)
-	local cx, cy = GetCursorPos()
-	for id, event in ipairs(inputEvents or { }) do
-		if event.type == "KeyUp" and event.key == "LEFTBUTTON" and cx >= r.x and cx < r.x + r.w and cy >= r.y and cy < r.y + r.h then
-			Marks.Again(build, 1)
-			inputEvents[id] = nil
-			return
-		end
-	end
+	addHit(build, r, function() Marks.Again(build, 1) end, "again")
 end
 
 function Marks.Dismiss(build, mark)
@@ -592,8 +621,6 @@ function Marks.DrawTree(build, spec, treeToScreen, scale, viewPort, inputEvents)
 	local list = build.agentMarks
 	if not list then return end
 	SetDrawLayer(nil, 35)
-	local cx, cy = GetCursorPos()
-	local hits = { }
 	local visible = Marks.Visible(build)
 	for _, m in ipairs(visible) do
 		local node = m.kind == "node" and spec.nodes[m.node]
@@ -612,13 +639,7 @@ function Marks.DrawTree(build, spec, treeToScreen, scale, viewPort, inputEvents)
 				end
 			end
 			drawStyle(m, sx - r, sy - r, r * 2, r * 2)
-			hits[m] = badge(build, m, sx + r + 10, sy - 11, viewPort.x + viewPort.width - 4)
-		end
-	end
-	for id, event in ipairs(inputEvents or { }) do
-		if event.type == "KeyUp" and event.key == "LEFTBUTTON" and click(build, hits, cx, cy) then
-			inputEvents[id] = nil
-			return
+			addBoxHits(build, m, badge(build, m, sx + r + 10, sy - 11, viewPort.x + viewPort.width - 4))
 		end
 	end
 end

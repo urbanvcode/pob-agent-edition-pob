@@ -1309,6 +1309,12 @@ function buildMode:OnFrame(inputEvents)
 		width = main.screenW - sideBarWidth - chatWidth,
 		height = main.screenH - 32
 	}
+	-- Agent Edition: clicks on the AI's marks, their boxes and buttons (and Esc) go to the marks
+	-- first, before the tab's own controls can take them (Agent/Marks.lua)
+	if self.agentMarksModule and self.agentMarksModule.HandleInput then
+		local errMsg = PCall(self.agentMarksModule.HandleInput, self, inputEvents)
+		if errMsg then ConPrintf("[Agent] marks input: %s", errMsg) end
+	end
 	if self.viewMode == "IMPORT" then
 		self.importTab:Draw(tabViewPort, inputEvents)  
 	elseif self.viewMode == "NOTES" then
@@ -1342,6 +1348,7 @@ function buildMode:OnFrame(inputEvents)
 	elseif self.agentMarksHistory and self.agentMarksModule then
 		PCall(self.agentMarksModule.DrawAgain, self, tabViewPort, inputEvents)
 	end
+	if self.agentMarksModule and self.agentMarksModule.EndFrame then self.agentMarksModule.EndFrame(self) end
 
 	-- Draw overlay panes on top of all tab content (last = topmost)
 	for _, pane in ipairs(self.overlayPanes) do
