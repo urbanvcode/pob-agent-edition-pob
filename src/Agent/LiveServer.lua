@@ -234,6 +234,36 @@ function LiveServer:AddLiveHandlers(handlers)
 		return { ok = true, view = view }
 	end
 
+	-- Tree tab compare view and respec planner (TreeTab:AgentCompare, Agent/TreePlanPanel.lua):
+	-- { compare = spec index | title } or { xml, title } (another build, last sync), { off = true }.
+	-- Returns the panel's plan (the same as tree_plan).
+	handlers.tree_compare_view = function(params)
+		if not buildLoaded() or not build.treeTab then return { ok = false, error = "no build open in PoB" } end
+		params = params or { }
+		local tab = build.treeTab
+		local ok, err = tab:AgentCompare(params)
+		if not ok then return { ok = false, error = err } end
+		build.viewMode = "TREE"
+		if params.off then return { ok = true, off = true } end
+		local panel = tab.planPanel
+		panel.shown, panel.labels = true, true
+		tab.controls.compareLabels.state, tab.controls.comparePlan.state = true, true
+		panel.key, panel.plan = nil, nil
+		panel:Update()
+		if panel.error and not panel.plan then return { ok = false, error = panel.error } end
+		-- Unticked rows, as the tick boxes would (tests, or the AI showing a subset).
+		if type(params.skip) == "table" then
+			panel.skip = { }
+			for _, id in ipairs(params.skip) do panel.skip[tostring(id)] = true end
+			panel:Refresh(false)
+		end
+		local first = panel.plan and panel.plan.changes and panel.plan.changes[1]
+		if first then tab:FocusNode(first.node) end
+		local plan = panel.plan or { ok = true, changes = { } }
+		plan.compareTitle = tab:CompareTitle()
+		return plan
+	end
+
 	-- Guide tab: show it and press Analyse (same as the button).
 	handlers.guide_tab = function(params)
 		if not buildLoaded() or not build.guideTab then return { ok = false, error = "no build open in PoB" } end

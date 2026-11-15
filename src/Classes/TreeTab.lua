@@ -104,25 +104,32 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 
 	-- Compare checkbox
 	self.controls.compareCheck = new("CheckBoxControl", { "LEFT", self.controls.specSelect, "RIGHT" }, { 74, 0, 20 }, "Compare:", function(state)
-		self.isComparing = state
-		self:SetCompareSpec(self.activeCompareSpec)
-		self.controls.compareSelect.shown = state
-		if state then
-			self.controls.reset:SetAnchor("LEFT", self.controls.compareSelect, "RIGHT", nil, nil, nil)
-		else
-			self.controls.reset:SetAnchor("LEFT", self.controls.compareCheck, "RIGHT", nil, nil, nil)
-		end
+		self:SetComparing(state)
 	end)
 
 	-- Compare tree dropdown
 	self.controls.compareSelect = new("DropDownControl", { "LEFT", self.controls.compareCheck, "RIGHT" }, { 8, 0, 190, 20 }, nil, function(index, value)
 		if self.specList[index] then
 			self:SetCompareSpec(index)
-		else
-			self:OpenSpecManagePopup()
+		elseif self.agentCompare and index == #self.specList + 1 then
+			self.compareExtra = true
+		elseif value == "Other build..." then
+			self:OpenCompareBuildPopup()
+		elseif value == "Last sync" then
+			self:CompareLastSync()
 		end
 	end)
 	self.controls.compareSelect.shown = false
+	-- Agent Edition: respec planner (labels on the tree, changes panel); Agent/TreePlanPanel.lua
+	self.planPanel = LoadModule("Agent/TreePlanPanel").new(self)
+	self.controls.compareLabels = new("CheckBoxControl", { "LEFT", self.controls.compareSelect, "RIGHT" }, { 60, 0, 20 }, "Labels:", function(state)
+		self.planPanel.labels = state
+	end, "Show NEW / REMOVED / MASTERY CHANGED boxes next to the changed nodes", true)
+	self.controls.compareLabels.shown = function() return self.isComparing end
+	self.controls.comparePlan = new("CheckBoxControl", { "LEFT", self.controls.compareLabels, "RIGHT" }, { 46, 0, 20 }, "Plan:", function(state)
+		self.planPanel.shown = state
+	end, "Show the respec planner beside the tree: each change, its gain, tick boxes, Orbs of Regret", true)
+	self.controls.comparePlan.shown = function() return self.isComparing end
 	self.controls.compareSelect.maxDroppedWidth = 1000
 	self.controls.compareSelect.enableDroppedWidth = true
 	self.controls.compareSelect.enableChangeBoxWidth = true
@@ -393,7 +400,8 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 								+ self.controls.reset.width + self.controls.reset.x
 								+ self.controls.versionText.width() + self.controls.versionText.x
 								+ self.controls.versionSelect.width + self.controls.versionSelect.x
-								+ (self.isComparing and (self.controls.compareSelect.width + self.controls.compareSelect.x) or 0)
+								+ (self.isComparing and (self.controls.compareSelect.width + self.controls.compareSelect.x
+									+ self.controls.compareLabels.width + self.controls.compareLabels.x + self.controls.comparePlan.width + self.controls.comparePlan.x) or 0)
 	
 	local widthSecondLineControls = self.controls.treeSearch.width + 8
 									+ self.controls.findTimelessJewel.width + self.controls.findTimelessJewel.x
@@ -438,16 +446,38 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 	self.controls.specSelect.y = -bottomDrawerHeight - linesHeight
 
 	local treeViewPort = { x = viewPort.x, y = viewPort.y, width = viewPort.width, height = viewPort.height - (self.showConvert and 64 + bottomDrawerHeight + linesHeight or 32 + bottomDrawerHeight + linesHeight)}
+	-- Agent Edition: the respec planner takes the right edge of the tree while comparing
+	local panel = self.planPanel
+	local compareObj = self:CompareSpecObj()
+	panel:Update()
+	local showPanel = compareObj and panel.shown and compareObj ~= self.build.spec and treeViewPort.width > panel.WIDTH + 320
+	if showPanel then
+		treeViewPort.width = treeViewPort.width - panel.WIDTH
+		panel:Layout({ x = treeViewPort.x + treeViewPort.width, y = treeViewPort.y, w = panel.WIDTH, h = treeViewPort.height })
+		panel:HandleInput(inputEvents)
+	else
+		panel.rect = nil
+	end
 	if self.jumpToNode then
 		self.viewer:Focus(self.jumpToX, self.jumpToY, treeViewPort, self.build)
 		self.jumpToNode = false
 	end
-	self.viewer.compareSpec = self.isComparing and self.specList[self.activeCompareSpec] or nil
+	if self.centreOn then
+		self.viewer:CentreOn(self.centreOn.x, self.centreOn.y, treeViewPort, self.build)
+		self.centreOn = nil
+	end
+	self.viewer.compareSpec = compareObj
+	self.viewer.compareLabels = compareObj and panel:LabelData() or nil
 	self.viewer:Draw(self.build, treeViewPort, inputEvents)
+	if showPanel then panel:Draw() end
 
 	local newSpecList = self:GetSpecList()
-	self.controls.compareSelect.selIndex = self.activeCompareSpec
-	self.controls.compareSelect:SetList(newSpecList)
+	local compareList = copyTable(newSpecList)
+	if self.agentCompare then t_insert(compareList, "^x9FB8D0" .. self.agentCompare.title) end
+	t_insert(compareList, "Other build...")
+	t_insert(compareList, "Last sync")
+	self.controls.compareSelect.selIndex = self.compareExtra and #newSpecList + 1 or self.activeCompareSpec
+	self.controls.compareSelect:SetList(compareList)
 	t_insert(newSpecList, "Manage trees... (ctrl-m)")
 	self.controls.specSelect.selIndex = self.activeSpec
 	self.controls.specSelect:SetList(newSpecList)
@@ -583,6 +613,125 @@ function TreeTabClass:SetCompareSpec(specId)
 	local curSpec = self.specList[self.activeCompareSpec]
 
 	self.compareSpec = curSpec
+	self.compareExtra = false
+end
+
+-- Agent Edition: compare view and respec planner ------------------------------------
+
+function TreeTabClass:SetComparing(state)
+	self.isComparing = state
+	self.controls.compareCheck.state = state
+	if not self.compareExtra then self:SetCompareSpec(self.activeCompareSpec) end
+	self.controls.compareSelect.shown = state
+	if state then
+		self.controls.reset:SetAnchor("LEFT", self.controls.comparePlan, "RIGHT", nil, nil, nil)
+	else
+		self.controls.reset:SetAnchor("LEFT", self.controls.compareCheck, "RIGHT", nil, nil, nil)
+	end
+end
+
+-- The tree drawn as the compare overlay: a spec of this build, or a temporary one
+-- (another build, the last character sync) loaded for comparing only.
+function TreeTabClass:CompareSpecObj()
+	if not self.isComparing then return nil end
+	if self.compareExtra and self.agentCompare then return self.agentCompare.spec end
+	return self.specList[self.activeCompareSpec]
+end
+
+function TreeTabClass:CompareTitle()
+	if self.compareExtra and self.agentCompare then return self.agentCompare.title end
+	local spec = self.specList[self.activeCompareSpec]
+	return spec and (spec.title or "Default") or "?"
+end
+
+-- Load another build's tree as the temporary compare tree (not added to this build).
+function TreeTabClass:CompareWithXml(xml, title)
+	local ok, entry = pcall(new, "CompareEntry", xml, title)
+	if not ok or not entry or not entry.spec then return nil, "could not load " .. tostring(title) .. ": " .. tostring(entry) end
+	if entry.spec.curClassId ~= self.build.spec.curClassId then
+		return nil, tostring(title) .. " is a " .. tostring(entry.spec.curClassName) .. " tree; this build is " .. tostring(self.build.spec.curClassName)
+	end
+	self.agentCompare = { spec = entry.spec, entry = entry, title = title }
+	self.compareExtra = true
+	self:SetComparing(true)
+	return true
+end
+
+function TreeTabClass:CompareLastSync()
+	local TreeDiff = LoadModule("Agent/TreeDiff")
+	local xml, title = TreeDiff.lastSync(main.userPath and (main.userPath .. "AgentCache/history/"), self.build.buildName,
+		self.build.importTab and self.build.importTab.lastCharacterHash)
+	local ok, err = xml, title
+	if xml then ok, err = self:CompareWithXml(xml, title) end
+	if not ok then
+		self.compareExtra = false
+		main:OpenMessagePopup("Last sync", "^7" .. tostring(err))
+	end
+end
+
+function TreeTabClass:OpenCompareBuildPopup()
+	local TreeDiff = LoadModule("Agent/TreeDiff")
+	local files = TreeDiff.buildFiles(main.buildPath)
+	local names = { }
+	for _, f in ipairs(files) do t_insert(names, f.name) end
+	if #names == 0 then
+		main:OpenMessagePopup("Other build", "^7No saved builds found in " .. tostring(main.buildPath))
+		return
+	end
+	local controls = { }
+	controls.label = new("LabelControl", nil, { 0, 30, 0, 16 }, "^7Compare the active tree with the tree of:")
+	controls.build = new("DropDownControl", nil, { 0, 55, 420, 20 }, names)
+	controls.build.enableDroppedWidth = true
+	controls.go = new("ButtonControl", nil, { -60, 90, 100, 20 }, "Compare", function()
+		local f = files[controls.build.selIndex]
+		main:ClosePopup()
+		local xml = f and TreeDiff.readFile(f.file)
+		local ok, err = xml, "could not read " .. tostring(f and f.file)
+		if xml then ok, err = self:CompareWithXml(xml, f.name) end
+		if not ok then main:OpenMessagePopup("Other build", "^7" .. tostring(err)) end
+	end)
+	controls.cancel = new("ButtonControl", nil, { 60, 90, 100, 20 }, "Cancel", function() main:ClosePopup() end)
+	main:OpenPopup(460, 125, "Compare with another build", controls, "go", nil, "cancel")
+end
+
+-- For the AI (set_view { view: "TREE", compare }): params.compare = spec index or title,
+-- or params.xml + params.title (another build / last sync), params.off = true to stop.
+function TreeTabClass:AgentCompare(params)
+	if params.off then
+		self.compareExtra = false
+		self:SetComparing(false)
+		return true
+	end
+	if type(params.xml) == "string" then
+		local ok, err = self:CompareWithXml(params.xml, params.title or "Other build")
+		if not ok then return nil, err end
+		return true
+	end
+	local index = tonumber(params.compare)
+	if not index and params.compare then
+		local want = tostring(params.compare):lower()
+		for i, spec in ipairs(self.specList) do
+			if (spec.title or "Default"):lower() == want then index = i end
+		end
+	end
+	if not index or not self.specList[index] then
+		local names = { }
+		for i, spec in ipairs(self.specList) do t_insert(names, i .. " = " .. (spec.title or "Default")) end
+		return nil, "no tree " .. tostring(params.compare) .. " in this build (trees: " .. table.concat(names, ", ") .. ")"
+	end
+	if index == self.activeSpec then return nil, "tree " .. index .. " is the active tree; pick another one to compare with" end
+	self.compareExtra = false
+	self:SetCompareSpec(index)
+	self:SetComparing(true)
+	return true
+end
+
+-- Centre the tree on a node (changes panel row click), zoomed in enough to read it.
+function TreeTabClass:FocusNode(nodeId)
+	local spec = self.build.spec
+	local other = self:CompareSpecObj()
+	local node = spec.nodes[nodeId] or (other and other.nodes[nodeId])
+	if node and node.x then self.centreOn = { x = node.x, y = node.y } end
 end
 
 function TreeTabClass:ConvertToVersion(version, remove, success, ignoreTreeSubType)
