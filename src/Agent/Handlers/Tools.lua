@@ -807,30 +807,6 @@ ops.spec = function(o)
 	return { activeSpec = active, title = build.spec.title or ('Spec ' .. active), specs = #build.treeTab.specList }
 end
 
--- One-line notes the AI leaves on nodes of a tree; the Tree tab shows them in the compare labels.
--- Stored on the spec in the build file (<AgentNotes>). notes: { [nodeId] = "text" } ("" removes one).
-ops.spec_notes = function(o)
-	local tab = build.treeTab
-	local index = tonumber(o.spec) or tab.activeSpec
-	if o.spec ~= nil and not tonumber(o.spec) then
-		for i, s in ipairs(tab.specList) do if (s.title or ''):lower() == tostring(o.spec):lower() then index = i end end
-	end
-	local spec = tab.specList[index]
-	if not spec then return nil, 'no tree ' .. tostring(o.spec) .. ' (1-' .. #tab.specList .. ')' end
-	if type(o.notes) ~= 'table' then return nil, 'notes: { [nodeId]: "one line" }' end
-	spec.agentNotes = spec.agentNotes or {}
-	local set, cleared, errors = 0, 0, {}
-	for id, text in pairs(o.notes) do
-		local nodeId = tonumber(id)
-		if not nodeId or not spec.nodes[nodeId] then t_insert(errors, 'no node ' .. tostring(id))
-		elseif tostring(text) == '' then spec.agentNotes[nodeId] = nil cleared = cleared + 1
-		else spec.agentNotes[nodeId] = tostring(text):gsub('[%c]+', ' '):sub(1, 120) set = set + 1 end
-	end
-	if set + cleared == 0 then return nil, table.concat(errors, '; ') end
-	build.modFlag = true
-	return { spec = index, title = spec.title or ('Spec ' .. index), set = set, cleared = cleared, errors = #errors > 0 and errors or nil }
-end
-
 -- config
 ops.config = function(o)
 	local values = {}
@@ -1393,5 +1369,5 @@ loadfile(DIR .. 'Create.lua')(handlers, Ops, { strip = strip })
 -- Tree compare as a respec planner: per-change gains, the ticked set checked like what_if
 loadfile(DIR .. 'TreePlan.lua')(handlers, Ops, {
 	num = num, dpsOf = dpsOf, keyStats = keyStats, recalc = recalc, capture = capture, restore = restore,
-	costWarnings = costWarnings, assumptions = assumptions, treeSummary = treeSummary,
+	costWarnings = costWarnings, assumptions = assumptions, treeSummary = treeSummary, ops = ops,
 })

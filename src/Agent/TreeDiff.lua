@@ -13,6 +13,7 @@
 -- nodes, and whatever was reached only through them is cut off (PoB drops it, we report it).
 local dkjson = require("dkjson")
 local t_insert, t_sort = table.insert, table.sort
+local m_max = math.max
 
 local TreeDiff = { }
 
@@ -126,19 +127,21 @@ end
 -- Returns { changes = {...}, sameBuild, note? } or nil, error.
 function TreeDiff.diff(base, other, baseBuild, otherBuild)
 	if not base or not other then return nil, "no tree to compare" end
-	if base.curClassId ~= other.curClassId then
-		return nil, string.format("the trees are of different classes (%s and %s): a respec cannot change the class", tostring(base.curClassName), tostring(other.curClassName))
-	end
 	local sameBuild = otherBuild == nil or otherBuild == baseBuild
 	otherBuild = otherBuild or baseBuild
 	local res = { changes = { }, sameBuild = sameBuild }
-	-- Another ascendancy: its nodes are left out of the plan (that is a new Labyrinth run, not a respec of points).
+	-- Another class or ascendancy: the node differences are still listed, but a respec cannot
+	-- change the class, and another ascendancy is a new Labyrinth run, not Orbs of Regret.
 	local otherAsc = base.curAscendClassId ~= other.curAscendClassId
-	if otherAsc then
-		res.note = string.format("the ascendancy differs (%s and %s): ascendancy nodes are not part of this plan", tostring(base.curAscendClassName), tostring(other.curAscendClassName))
+	if base.curClassId ~= other.curClassId then
+		res.classDiffers = true
+		res.note = string.format("THE CLASS DIFFERS (%s and %s): these are the node differences only; a respec cannot change the class, so gains are not simulated", tostring(base.curClassName), tostring(other.curClassName))
+	elseif otherAsc then
+		res.ascendancyDiffers = true
+		res.note = string.format("the ascendancy differs (%s and %s): the other ascendancy's nodes are listed but not simulated (that needs a new Labyrinth run, not Orbs of Regret)", tostring(base.curAscendClassName), tostring(other.curAscendClassName))
 	end
 	local function counted(node)
-		return node and not isStart(node) and not (otherAsc and node.ascendancyName)
+		return node and not isStart(node)
 	end
 	local added, removed = { }, { }
 	for id, node in pairs(other.allocNodes) do
@@ -150,7 +153,10 @@ function TreeDiff.diff(base, other, baseBuild, otherBuild)
 	local function row(kind, r, spec)
 		local node = spec.nodes[r.node]
 		local ch = { kind = kind, id = (kind == "add" and "+" or "-") .. r.node, node = r.node, name = nodeName(node), type = node and node.type,
-			path = r.path, own = r.own, ascendancy = node and node.ascendancyName and true or nil }
+			path = r.path, own = r.own, ascendancy = node and node.ascendancyName and true or nil,
+			cluster = (r.node >= 65536 or (node and node.expansionJewel and true)) or nil }
+		-- Nodes of another class or ascendancy cannot be taken by a respec: listed, not simulated.
+		if res.classDiffers or (otherAsc and node and node.ascendancyName) then ch.notSimulated = true end
 		local points = 0
 		for _, id in ipairs(r.own) do
 			local n = spec.nodes[id]
@@ -186,7 +192,8 @@ function TreeDiff.diff(base, other, baseBuild, otherBuild)
 				else same = (a and a:BuildRaw()) == (b and b:BuildRaw()) end
 				if not same then
 					t_insert(res.changes, { kind = "jewel", id = "j" .. id, node = id, name = nodeName(node), type = "Socket", path = { id }, own = { id }, points = 0,
-						oldJewel = jewelName(a), newJewel = jewelName(b), simulated = sameBuild or nil })
+						oldJewel = jewelName(a), newJewel = jewelName(b), simulated = sameBuild or nil,
+						cluster = (node.expansionJewel or (a and a.clusterJewel) or (b and b.clusterJewel)) and true or nil })
 				end
 			end
 		end
@@ -204,10 +211,79 @@ end
 
 -- Label tag for a changed node, as the Tree tab draws it.
 function TreeDiff.tag(ch)
-	if ch.kind == "add" then return "NEW"
-	elseif ch.kind == "remove" then return "REMOVED"
-	elseif ch.kind == "mastery" then return "MASTERY CHANGED"
-	else return "JEWEL CHANGED" end
+	local tag
+	if ch.kind == "add" then tag = "NEW"
+	elseif ch.kind == "remove" then tag = "REMOVED"
+	elseif ch.kind == "mastery" then tag = "MASTERY CHANGED"
+	else tag = ch.cluster and "CLUSTER JEWEL CHANGED" or "JEWEL CHANGED" end
+	if ch.cluster and ch.kind ~= "jewel" then tag = tag .. " (cluster)" end
+	if ch.order then tag = ch.order .. ". " .. tag end
+	return tag
+end
+
+-- The order to take the changes in: best gain per Orb of Regret or point first, but never
+-- before what it needs. A new node comes after the new rows on its path; a removal comes
+-- after the removals further out that pass through it (a node is refunded only from the edge).
+-- score(ch) = the change's own gain (higher is better); sets ch.order = 1, 2, 3...
+function TreeDiff.order(changes, score)
+	local needs = { }
+	local endOf = { }
+	for _, ch in ipairs(changes) do endOf[ch.node] = endOf[ch.node] or ch end
+	for _, ch in ipairs(changes) do
+		needs[ch] = { }
+		if ch.kind == "add" then
+			for _, id in ipairs(ch.path) do
+				local other = endOf[id]
+				if other and other ~= ch and other.kind == "add" then needs[ch][other] = true end
+			end
+		end
+	end
+	for _, outer in ipairs(changes) do
+		if outer.kind == "remove" then
+			for _, id in ipairs(outer.path) do
+				local inner = endOf[id]
+				if inner and inner ~= outer and inner.kind == "remove" then needs[inner][outer] = true end
+			end
+		end
+	end
+	local placed, n = { }, 0
+	while n < #changes do
+		local best, bestScore
+		for _, ch in ipairs(changes) do
+			if not placed[ch] then
+				local ready = true
+				for dep in pairs(needs[ch]) do if not placed[dep] then ready = false break end end
+				if ready then
+					local cost = m_max(1, math.abs(ch.points or 0))
+					local v = (score(ch) or 0) / cost
+					if not bestScore or v > bestScore + 1e-9 then best, bestScore = ch, v end
+				end
+			end
+		end
+		if not best then -- a cycle cannot happen, but never loop forever
+			for _, ch in ipairs(changes) do if not placed[ch] then best = ch break end end
+		end
+		n = n + 1
+		placed[best] = true
+		best.order = n
+		best.needs = { }
+		for dep in pairs(needs[best]) do t_insert(best.needs, dep.id) end
+		t_sort(best.needs)
+	end
+end
+
+-- Gain colour of a change: damage gain (green), defence gain (blue), loss (red) or none,
+-- with a strength from 0.35 (small) to 1 (10% or more) for shading.
+function TreeDiff.tone(g)
+	if not g then return nil end
+	local dps, ehp, hit = g.dpsPct or 0, g.ehpPct or 0, g.hitPct or 0
+	local worst = math.min(dps, ehp, hit)
+	local function strength(v) return 0.35 + 0.65 * math.min(1, math.abs(v) / 10) end
+	if worst < -0.05 and dps + ehp + hit < 0 then return { kind = "loss", strength = strength(worst) } end
+	local def = m_max(ehp, hit)
+	if dps > 0.05 and dps >= def then return { kind = "damage", strength = strength(dps) } end
+	if def > 0.05 then return { kind = "defence", strength = strength(def) } end
+	return { kind = "none", strength = 0 }
 end
 
 -- Per node: which change it belongs to, and whether it is that change's end node.

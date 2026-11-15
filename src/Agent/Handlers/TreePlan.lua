@@ -13,6 +13,7 @@ local m_floor, m_min, m_max, m_abs = math.floor, math.min, math.max, math.abs
 local num, dpsOf, keyStats, recalc = shared.num, shared.dpsOf, shared.keyStats, shared.recalc
 local capture, restore, costWarnings = shared.capture, shared.restore, shared.costWarnings
 local assumptions, treeSummary = shared.assumptions, shared.treeSummary
+local ops = shared.ops
 
 local TreeDiff = LoadModule("Agent/TreeDiff")
 
@@ -47,6 +48,23 @@ local function gainOf(after, before)
 	return g
 end
 
+-- A tree of another build: its active one, or a stage / loadout / spec by title or number.
+local function pickSpec(entry, want)
+	local list = entry.treeTab and entry.treeTab.specList or { entry.spec }
+	if want == nil or want == '' then return entry.spec, nil end
+	local index = tonumber(want)
+	if not index then
+		local w = tostring(want):lower()
+		for i, s in ipairs(list) do if (s.title or ''):lower() == w then index = i end end
+		if not index then for i, s in ipairs(list) do if (s.title or ''):lower():find(w, 1, true) then index = index or i end end end
+	end
+	if index and list[index] then return list[index], list[index].title or ('tree ' .. index) end
+	local names = { }
+	for i, s in ipairs(list) do t_insert(names, i .. ' = ' .. (s.title or 'Default')) end
+	return nil, 'no stage or tree "' .. tostring(want) .. '" in that build (trees: ' .. table.concat(names, ', ') .. ')'
+end
+handlers._pickSpec = pickSpec
+
 -- Which tree to compare with. Returns otherSpec, otherBuild, title, source or nil, error.
 local function resolveOther(params)
 	if params.otherSpec then return params.otherSpec, params.otherBuild, params.title or 'other tree', 'object' end
@@ -54,7 +72,9 @@ local function resolveOther(params)
 	if type(params.xml) == 'string' and params.xml ~= '' then
 		local ok, entry = pcall(new, 'CompareEntry', params.xml, params.title or 'Other build')
 		if not ok or not entry or not entry.spec then return nil, 'could not load that build: ' .. tostring(entry) end
-		return entry.spec, entry, params.title or 'Other build', 'build'
+		local spec, title = pickSpec(entry, params.spec)
+		if not spec then return nil, title end
+		return spec, entry, (params.title or 'Other build') .. (title and (' / ' .. title) or ''), 'build'
 	end
 	local want = params.compare
 	if want == nil then return nil, 'compare: a tree number or title, a build name or "last sync"' end
@@ -159,10 +179,21 @@ handlers.tree_plan = function(params)
 	local changes = d.changes
 	local skip = { }
 	for _, id in ipairs(type(params.skip) == 'table' and params.skip or { }) do skip[tostring(id)] = true end
+	if type(params.only) == 'table' and #params.only > 0 then
+		local keep = { }
+		for _, id in ipairs(params.only) do keep[tostring(id)] = true end
+		for _, ch in ipairs(changes) do if not keep[ch.id] then skip[ch.id] = true end end
+		for id in pairs(keep) do skip[id] = skip[id] or nil end
+	end
+	-- Rows that cannot be taken by a respec (another class or ascendancy, a jewel from another build) stay unticked.
+	for _, ch in ipairs(changes) do
+		if ch.notSimulated or (ch.kind == 'jewel' and not ch.simulated) then skip[ch.id] = true end
+	end
 	local valid = { }
 	for _, ch in ipairs(changes) do valid[ch.id] = true end
 	local unknown = { }
 	for id in pairs(skip) do if not valid[id] then t_insert(unknown, id) end end
+	for _, id in ipairs(type(params.only) == 'table' and params.only or { }) do if not valid[tostring(id)] then t_insert(unknown, tostring(id)) end end
 
 	local calcFunc = build.calcsTab:GetMiscCalculator()
 	local scratch = new('PassiveSpec', build, base.treeVersion)
@@ -177,9 +208,9 @@ handlers.tree_plan = function(params)
 	local baseM = metrics(baseOut)
 
 	-- 1. Each change alone.
-	if params.measure ~= false then
+	if params.measure ~= false and not d.classDiffers then
 		for _, ch in ipairs(changes) do
-			if ch.kind ~= 'jewel' or ch.simulated then
+			if not ch.notSimulated and (ch.kind ~= 'jewel' or ch.simulated) then
 				local only = { }
 				for id in pairs(all) do if id ~= ch.id then only[id] = true end end
 				local state, jewels, intended = TreeDiff.state(base, other, changes, only, d.sameBuild)
@@ -192,6 +223,14 @@ handlers.tree_plan = function(params)
 			end
 		end
 	end
+
+	-- Order to take them in (best gain per point or Orb of Regret first, dependencies first).
+	local function score(ch)
+		local g = ch.gain or (params.gains and params.gains[ch.id])
+		if not g then return 0 end
+		return (g.dpsPct or 0) + (g.ehpPct or 0) + (g.hitPct or 0)
+	end
+	TreeDiff.order(changes, score)
 
 	-- 2. The ticked set: cost on the scratch spec, then measured for real and rolled back.
 	local state, jewels, intended = TreeDiff.state(base, other, changes, skip, d.sameBuild)
@@ -232,6 +271,7 @@ handlers.tree_plan = function(params)
 		if c == nil or m_abs(c - v) > m_max(m_abs(v) * 1e-6, 1e-6) then rolledBack = false end
 	end
 	if not okR then return { ok = false, error = 'could not measure the plan: ' .. tostring(rerr), rolledBack = rolledBack } end
+	if d.classDiffers then plan.warnings = { { kind = 'class', text = d.note } } end
 	plan.before = before
 	plan.gain = gainOf(metrics(plan.after), metrics(before))
 
@@ -269,13 +309,71 @@ handlers.tree_plan = function(params)
 		t_insert(rows, {
 			id = ch.id, kind = ch.kind, node = ch.node, name = ch.name, type = ch.type, points = ch.points, nodes = #ch.path, own = #ch.own,
 			ascendancy = ch.ascendancy, effect = ch.effectText, oldEffect = ch.oldText, newEffect = ch.newText, jewel = ch.jewel,
-			oldJewel = ch.oldJewel, newJewel = ch.newJewel, notSimulated = (ch.kind == 'jewel' and not ch.simulated) or nil,
-			gain = ch.gain, dropped = ch.dropped, note = note, ticked = not skip[ch.id],
+			oldJewel = ch.oldJewel, newJewel = ch.newJewel,
+			gain = ch.gain or (params.gains and params.gains[ch.id]), dropped = ch.dropped, note = note, ticked = not skip[ch.id],
+			order = ch.order, needs = #ch.needs > 0 and ch.needs or nil, cluster = ch.cluster, notSimulated = (ch.notSimulated or (ch.kind == 'jewel' and not ch.simulated)) or nil,
+			tone = TreeDiff.tone(ch.gain or (params.gains and params.gains[ch.id])),
 			neededBy = ch.kind == 'add' and skip[ch.id] and neededBy[ch.node] or nil,
 		})
 	end
-	return { ok = true, base = { title = base.title or ('Spec ' .. build.treeTab.activeSpec), index = build.treeTab.activeSpec },
+	return { ok = true, classDiffers = d.classDiffers, base = { title = base.title or ('Spec ' .. build.treeTab.activeSpec), index = build.treeTab.activeSpec },
 		other = { title = title, source = source, index = otherIndex }, sameBuild = d.sameBuild, note = d.note,
 		changes = rows, plan = plan, unknownSkip = #unknown > 0 and unknown or nil, rolledBack = rolledBack,
 		saved = savedSpec, assumptions = assumptions(), baseline = 'each change alone, against the active tree' }
+end
+
+-- edit ops ----------------------------------------------------------------------------
+-- One-line notes the AI leaves on nodes of a tree; the Tree tab shows them in the compare labels.
+-- Stored on the spec in the build file (<AgentNotes>). notes: { [nodeId] = "text" } ("" removes one).
+ops.spec_notes = function(o)
+	local tab = build.treeTab
+	local index = tonumber(o.spec) or tab.activeSpec
+	if o.spec ~= nil and not tonumber(o.spec) then
+		for i, s in ipairs(tab.specList) do if (s.title or ''):lower() == tostring(o.spec):lower() then index = i end end
+	end
+	local spec = tab.specList[index]
+	if not spec then return nil, 'no tree ' .. tostring(o.spec) .. ' (1-' .. #tab.specList .. ')' end
+	if type(o.notes) ~= 'table' then return nil, 'notes: { [nodeId]: "one line" }' end
+	spec.agentNotes = spec.agentNotes or {}
+	local set, cleared, errors = 0, 0, {}
+	for id, text in pairs(o.notes) do
+		local nodeId = tonumber(id)
+		if not nodeId or not spec.nodes[nodeId] then t_insert(errors, 'no node ' .. tostring(id))
+		elseif tostring(text) == '' then spec.agentNotes[nodeId] = nil cleared = cleared + 1
+		else spec.agentNotes[nodeId] = tostring(text):gsub('[%c]+', ' '):sub(1, 120) set = set + 1 end
+	end
+	if set + cleared == 0 then return nil, table.concat(errors, '; ') end
+	build.modFlag = true
+	return { spec = index, title = spec.title or ('Spec ' .. index), set = set, cleared = cleared, errors = #errors > 0 and errors or nil }
+end
+
+
+-- Apply changes from another tree into a NEW tree (never the player's own): the ticked set,
+-- `only` some change ids, or all but `skip`. o = { compare | xml + source_title (+ spec), only?, skip?, title? }
+ops.apply_tree = function(o)
+	local title = (type(o.title) == 'string' and o.title ~= '') and o.title or ((build.spec.title or 'Tree') .. ' - applied')
+	local res = handlers.tree_plan({ compare = o.compare, xml = o.xml, title = o.source_title, spec = o.spec, only = o.only, skip = o.skip, measure = false, save_as = title })
+	if not res or not res.ok then return nil, res and res.error or 'could not apply' end
+	if not res.saved then return nil, 'nothing was saved' end
+	local applied = { }
+	for _, c in ipairs(res.changes) do if c.ticked then t_insert(applied, c.id) end end
+	local out = { tree = res.saved.index, title = res.saved.title, applied = applied, regrets = res.plan.regrets, points = res.plan.pointsUsed,
+		warnings = nil, unknown = res.unknownSkip }
+	if #res.plan.warnings > 0 then
+		local w = { }
+		for _, x in ipairs(res.plan.warnings) do t_insert(w, x.text) end
+		out.warnings = w
+	end
+	return out
+end
+
+-- Make a tree of the loaded build the active one, by number or title (compare { a, b } with a guide stage).
+handlers.select_tree = function(params)
+	local spec, title = pickSpec(build, params and params.spec)
+	if not spec then return { ok = false, error = title } end
+	for i, s in ipairs(build.treeTab.specList) do
+		if s == spec then build.treeTab:SetActiveSpec(i) end
+	end
+	recalc()
+	return { ok = true, title = title }
 end
