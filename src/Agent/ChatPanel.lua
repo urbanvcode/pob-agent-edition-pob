@@ -67,7 +67,18 @@ local function findGroup(build, name)
 	end
 end
 
+-- A click on a link also points at the thing with the AI's marks (Agent/Marks.lua).
+local Marks
+local function pointAt(build, kind, name)
+	Marks = Marks or LoadModule("Agent/Marks")
+	build.agentMarksModule = Marks
+	local list = Marks.Set(build, { { target = name, kind = kind == "item" and "slot" or kind, tone = "info" } }, { title = name })
+	if list[1] and list[1].kind == "node" and build.treeTab and build.treeTab.FocusNode then build.treeTab:FocusNode(list[1].node) end
+	return list[1]
+end
+
 local function openLink(build, kind, name)
+	pointAt(build, kind, name)
 	if kind == "node" then
 		build.viewMode = "TREE"
 		local search = build.treeTab.controls.treeSearch
@@ -519,6 +530,7 @@ end
 
 -- Exposed for tests.
 Panel._layout = layout
+Panel._openLink = openLink
 Panel._deltaText = deltaText
 
 return Panel

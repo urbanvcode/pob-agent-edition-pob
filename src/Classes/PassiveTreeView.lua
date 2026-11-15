@@ -268,6 +268,15 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 		treeClick = nil
 	end
 
+	-- Agent Edition: glide towards a CentreOn target
+	if self.glide then
+		local k = m_min(1, (GetTime() - self.glide.t0) / 350)
+		k = 1 - (1 - k) * (1 - k)
+		self.zoomX = self.glide.fromX + (self.glide.toX - self.glide.fromX) * k
+		self.zoomY = self.glide.fromY + (self.glide.toY - self.glide.fromY) * k
+		if k >= 1 or self.dragging then self.glide = nil end
+	end
+
 	-- Clamp zoom offset
 	local clampFactor = self.zoom * 2 / 3
 	self.zoomX = self.zoomX ~= nil and m_min(m_max(self.zoomX, -viewPort.width * clampFactor), viewPort.width * clampFactor) or 1
@@ -1343,15 +1352,20 @@ function PassiveTreeViewClass:Focus(x, y, viewPort, build)
 	self.zoomY = -y * scale
 end
 
--- Agent Edition: centre on a point without zooming all the way in (changes panel rows)
-function PassiveTreeViewClass:CentreOn(x, y, viewPort, build)
+-- Agent Edition: centre on a point, zoomed in enough to read it (changes panel rows, AI marks).
+-- Glides there over a third of a second unless reduced motion is on (Agent/Marks.lua).
+function PassiveTreeViewClass:CentreOn(x, y, viewPort, build, instant)
 	if self.zoomLevel < 5 then
 		self.zoomLevel = 5
 		self.zoom = 1.2 ^ self.zoomLevel
 	end
 	local scale = m_min(viewPort.width, viewPort.height) / build.spec.tree.size * self.zoom
-	self.zoomX = -x * scale
-	self.zoomY = -y * scale
+	local reduced = build.agentMarksModule and build.agentMarksModule.ReducedMotion()
+	if instant or reduced or not GetTime then
+		self.zoomX, self.zoomY, self.glide = -x * scale, -y * scale, nil
+	else
+		self.glide = { fromX = self.zoomX, fromY = self.zoomY, toX = -x * scale, toY = -y * scale, t0 = GetTime() }
+	end
 end
 
 function PassiveTreeViewClass:DoesNodeMatchSearchParams(node)

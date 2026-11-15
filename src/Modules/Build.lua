@@ -1339,6 +1339,8 @@ function buildMode:OnFrame(inputEvents)
 	if self.agentMarks and self.agentMarksModule then
 		local errMsg = PCall(self.agentMarksModule.Draw, self, tabViewPort, inputEvents)
 		if errMsg then ConPrintf("[Agent] marks: %s", errMsg) self.agentMarks = nil end
+	elseif self.agentMarksHistory and self.agentMarksModule then
+		PCall(self.agentMarksModule.DrawAgain, self, tabViewPort, inputEvents)
 	end
 
 	-- Draw overlay panes on top of all tab content (last = topmost)

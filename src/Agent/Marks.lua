@@ -6,6 +6,12 @@
 -- a Configuration option; a Calcs row. Each mark is numbered (1, 2, 3 for step-by-step
 -- help), drawn as a pulsing outline with a labelled box, and stays until the player
 -- clicks it away, presses "Clear AI marks", or the AI clears them (point: []).
+-- Styles (ring, blinking outline, glow, arrow) and meanings (do = green, problem = red,
+-- info = blue; Okabe-Ito colours, readable with colour-vision deficiencies), a spotlight
+-- that dims the rest, guided tours (Next / Back), the route to a node numbered in order,
+-- an item's mod line, a candidate item's stat changes, gem swaps and socket colours, a
+-- gain tag from PoB, a short history to show again, and a reduced-motion option.
+-- Sizes are PoB UI units, so they follow PoB's own UI scale.
 -- Marks live in memory only (build.agentMarks): never saved into the build file.
 -- Drawing only: nothing here focuses or raises the PoB window.
 local t_insert = table.insert
@@ -124,14 +130,44 @@ local function resolveCalcs(build, want)
 	end
 end
 
--- One mark from { target, kind?, text? }. kind: node | slot | flask | gem | config | calcs (auto when left out).
+-- Gem socket colours (PoB's grantedEffect.color: 1 red, 2 green, 3 blue).
+local SOCKET = { [1] = "red", [2] = "green", [3] = "blue" }
+local function gemColour(gem)
+	local effect = gem and (gem.grantedEffect or (gem.gemData and gem.gemData.grantedEffect))
+	return effect and SOCKET[effect.color] or "white"
+end
+local function gemByName(build, name)
+	local w = lower(name)
+	for id, g in pairs(build.data and build.data.gems or data.gems or { }) do
+		if lower(g.name) == w then return g end
+	end
+end
+
+-- The mod lines of an item, as the player sees them.
+local function itemLines(item)
+	local out = { }
+	for _, key in ipairs({ "enchantModLines", "implicitModLines", "explicitModLines", "crucibleModLines" }) do
+		for _, l in ipairs(item[key] or { }) do
+			local text = strip(l.line or "")
+			if text ~= "" then t_insert(out, text) end
+		end
+	end
+	return out
+end
+
+local STYLES = { ring = true, outline = true, glow = true, arrow = true }
+local TONES = { ["do"] = true, problem = true, info = true }
+
+-- One mark from { target, kind?, text?, style?, tone?, line?, candidate?, to?, to_slot?, ops? }.
+-- kind: node | slot | flask | gem | config | calcs (auto when left out).
 function Marks.Resolve(build, item)
 	if type(item) ~= "table" then item = { target = item } end
 	local want = item.target or item.name or item.id
 	if want == nil or tostring(want) == "" then return nil, "a mark needs a target" end
 	want = tostring(want)
 	local kind = item.kind and lower(item.kind) or nil
-	local mark = { text = item.text and tostring(item.text):gsub("[%c]+", " "):sub(1, 140) or nil, target = want }
+	local mark = { text = item.text and tostring(item.text):gsub("[%c]+", " "):sub(1, 140) or nil, target = want,
+		style = STYLES[lower(item.style)] and lower(item.style) or nil, tone = TONES[lower(item.tone)] and lower(item.tone) or nil }
 	local function asNode()
 		local node = resolveNode(build, want, kind)
 		if not node then return nil end
@@ -140,9 +176,17 @@ function Marks.Resolve(build, item)
 		node._markEffect = nil
 		mark.allocated = node.alloc or nil
 		if not node.alloc and node.path then
+			-- The route from the allocated tree, numbered in the order to take it (nearest first).
+			local path = { }
+			for _, p in ipairs(node.path) do t_insert(path, p) end
+			table.sort(path, function(a, b)
+				local da, db = a.pathDist or 0, b.pathDist or 0
+				if da ~= db then return da < db end
+				return a.id < b.id
+			end)
 			mark.path = { }
-			for _, p in ipairs(node.path) do t_insert(mark.path, p.id) end
-			mark.points = #node.path
+			for _, p in ipairs(path) do t_insert(mark.path, p.id) end
+			mark.points = #path
 		end
 		mark.where = node.alloc and "allocated" or (node.path and (#node.path .. " point" .. (#node.path == 1 and "" or "s") .. " from your tree") or "not reachable from your tree")
 		return mark
@@ -152,8 +196,18 @@ function Marks.Resolve(build, item)
 		if not slot then return nil end
 		mark.kind = slotName:match("^Flask") and "flask" or "slot"
 		mark.view, mark.slot = "ITEMS", slotName
-		local item = slot.selItemId and slot.selItemId > 0 and build.itemsTab.items[slot.selItemId]
-		mark.label = slotName .. (item and (": " .. (item.title or item.name or "")) or " (empty)")
+		local it = slot.selItemId and slot.selItemId > 0 and build.itemsTab.items[slot.selItemId]
+		mark.label = slotName .. (it and (": " .. (it.title or it.name or "")) or " (empty)")
+		if it then mark.itemName = it.title or it.name end
+		-- One mod line of the item to point at.
+		if item.line and it then
+			local w = lower(item.line)
+			for i, l in ipairs(itemLines(it)) do
+				if lower(l):find(w, 1, true) then mark.line, mark.lineIndex = l, i break end
+			end
+			if not mark.line then return nil, 'no line "' .. tostring(item.line) .. '" on ' .. tostring(mark.itemName) end
+			mark.lines = itemLines(it)
+		end
 		return mark
 	end
 	local function asGem()
@@ -161,13 +215,20 @@ function Marks.Resolve(build, item)
 		if not gi then return nil end
 		mark.kind, mark.view, mark.group, mark.gem = "gem", "SKILLS", gi, ji
 		mark.label = gem and (gem.nameSpec .. " (group " .. gi .. ")") or ("Group " .. gi .. ": " .. tostring(group.displayLabel or group.label or ""))
+		if gem then mark.socket = gemColour(gem) end
+		if item.to then
+			local g = gemByName(build, item.to)
+			mark.to = g and g.name or tostring(item.to)
+			mark.toSocket = g and SOCKET[g.grantedEffect and g.grantedEffect.color] or (g and "white") or nil
+		end
+		if item.to_slot then mark.toSlot = tostring(item.to_slot) mark.fromSlot = group.slot end
 		return mark
 	end
 	local function asConfig()
 		local opt = resolveConfig(build, want)
 		if not opt then return nil end
 		mark.kind, mark.view, mark.var = "config", "CONFIG", opt.var
-		mark.label = strip(opt.label) .. (opt.section and "" or "")
+		mark.label = strip(opt.label)
 		return mark
 	end
 	local function asCalcs()
@@ -177,72 +238,241 @@ function Marks.Resolve(build, item)
 		mark.label = label .. (sub ~= label and (" (" .. sub .. ")") or "")
 		return mark
 	end
-	local order = { node = { asNode }, slot = { asSlot }, flask = { asSlot }, gem = { asGem }, skill = { asGem }, config = { asConfig }, calcs = { asCalcs } }
+	local order = { node = { asNode }, slot = { asSlot }, item = { asSlot }, flask = { asSlot }, gem = { asGem }, skill = { asGem }, config = { asConfig }, calcs = { asCalcs } }
 	local tries = kind and order[kind] or { asSlot, asGem, asNode, asConfig, asCalcs }
 	if not tries then return nil, "unknown kind " .. kind .. " (node, slot, flask, gem, config, calcs)" end
 	for _, fn in ipairs(tries) do
-		local m = fn()
+		local m, err = fn()
 		if m then return m end
+		if err then return nil, err end
 	end
 	return nil, 'nothing called "' .. want .. '"' .. (kind and (" (" .. kind .. ")") or "") .. " in this build"
 end
 
--- Set the marks (an empty list clears them). Returns marks, errors.
-function Marks.Set(build, items)
+-- Set the marks (an empty list clears them). opts = { tour = bool, title }. Returns marks, errors.
+-- Every set is kept in a short history ("show me again").
+Marks.HISTORY = 10
+function Marks.Set(build, items, opts)
+	opts = opts or { }
 	local list, errors = { }, { }
 	for _, item in ipairs(items or { }) do
 		local m, err = Marks.Resolve(build, item)
-		if m then m.n = #list + 1 t_insert(list, m) else t_insert(errors, err) end
+		if m then m.n = #list + 1 m.source = item t_insert(list, m) else t_insert(errors, err) end
 	end
 	build.agentMarks = #list > 0 and list or nil
+	build.agentTour = (#list > 0 and opts.tour) and { step = 1 } or nil
 	build.agentMarksAt = GetTime and GetTime() or 0
+	if #list > 0 and not opts.replay then
+		build.agentMarksHistory = build.agentMarksHistory or { }
+		local h = build.agentMarksHistory
+		local raw = { }
+		for _, m in ipairs(list) do t_insert(raw, m.source) end
+		t_insert(h, { title = opts.title or list[1].label, count = #list, tour = opts.tour or nil, items = raw, at = os.time() })
+		while #h > Marks.HISTORY do table.remove(h, 1) end
+	end
 	return list, errors
 end
 
-function Marks.Clear(build) build.agentMarks = nil end
+-- Replay a set from the history: 1 = the latest, 2 = the one before...
+function Marks.Again(build, back)
+	local h = build.agentMarksHistory or { }
+	local entry = h[#h - ((tonumber(back) or 1) - 1)]
+	if not entry then return nil, "no earlier marks to show again" end
+	return Marks.Set(build, entry.items, { tour = entry.tour, title = entry.title, replay = true })
+end
+
+function Marks.Clear(build)
+	if build.agentMarks then build.agentMarksClearedAt = GetTime and GetTime() or 0 end
+	build.agentMarks, build.agentTour = nil, nil
+end
+
+-- Tours: one step at a time with Next / Back.
+function Marks.Step(build, delta)
+	local tour, list = build.agentTour, build.agentMarks
+	if not tour or not list then return nil end
+	tour.step = m_max(1, m_min(#list, tour.step + delta))
+	local m = list[tour.step]
+	build.viewMode = m.view
+	if m.kind == "node" and build.treeTab and build.treeTab.FocusNode then build.treeTab:FocusNode(m.node) end
+	return tour.step
+end
+
+-- Which marks are drawn now: all of them, or the current tour step.
+function Marks.Visible(build)
+	local list = build.agentMarks or { }
+	if build.agentTour then return { list[build.agentTour.step] } end
+	return list
+end
+
+-- Settings: reduced motion (no pulsing, blinking or zoom animation), kept in AgentEdition.json.
+-- Cached on main (shared by every copy of this module: the chat panel loads its own).
+function Marks.ReducedMotion()
+	local holder = main or Marks
+	if holder.agentReducedMotion ~= nil then return holder.agentReducedMotion end
+	local ok, Settings = pcall(LoadModule, "Agent/Settings")
+	holder.agentReducedMotion = ok and main and main.userPath and Settings.get(main.userPath, "marksReducedMotion") == true or false
+	return holder.agentReducedMotion
+end
+function Marks.SetReducedMotion(on)
+	local holder = main or Marks
+	holder.agentReducedMotion = on and true or false
+	local ok, Settings = pcall(LoadModule, "Agent/Settings")
+	if ok and main and main.userPath then Settings.set(main.userPath, "marksReducedMotion", holder.agentReducedMotion or "") end
+	return holder.agentReducedMotion
+end
 
 -- Drawing ------------------------------------------------------------------------------
-local COL = { 1, 0.78, 0.2 } -- amber: stands out from PoB's own greens, reds and blues
+-- Okabe-Ito colours (readable with the common colour-vision deficiencies): bluish green = do
+-- this, vermillion = a problem, sky blue = information, orange = no meaning given. Styles
+-- differ in shape too, so meaning never rests on colour alone.
+Marks.TONES = {
+	["do"] = { 0, 0.62, 0.45, "^x009E73" },
+	problem = { 0.84, 0.37, 0, "^xD55E00" },
+	info = { 0.34, 0.71, 0.91, "^x56B4E9" },
+	none = { 0.9, 0.62, 0, "^xE69F00" },
+}
+local function toneOf(m) return Marks.TONES[m.tone or "none"] or Marks.TONES.none end
 
-local function pulse()
+-- 0..1 brightness for pulsing / blinking; constant with reduced motion.
+function Marks.Pulse(style)
+	if Marks.ReducedMotion() then return 1 end
 	local t = (GetTime and GetTime() or 0) / 1000
+	if style == "outline" then return (math.floor(t * 2.5) % 2 == 0) and 1 or 0.25 end -- blinking
+	if style == "glow" then return 0.75 + 0.25 * math.sin(t * 3) end
 	return 0.55 + 0.45 * math.sin(t * 5)
 end
 
-local function outline(x, y, w, h, thick, a)
-	SetDrawColor(COL[1], COL[2], COL[3], a)
+local function frame(c, x, y, w, h, thick, a)
+	SetDrawColor(c[1], c[2], c[3], a)
 	DrawImage(nil, x - thick, y - thick, w + thick * 2, thick)
 	DrawImage(nil, x - thick, y + h, w + thick * 2, thick)
 	DrawImage(nil, x - thick, y, thick, h)
 	DrawImage(nil, x + w, y, thick, h)
 end
 
--- The numbered box beside a mark. Returns its rectangle (a click on it dismisses the mark).
-local function badge(m, x, y, maxRight)
-	local text = "^x000000" .. m.n .. ". ^7" .. (m.text or m.label)
-	local sub = m.text and m.label or nil
-	local w = m_max(DrawStringWidth(16, "VAR", text), sub and DrawStringWidth(12, "VAR", sub) or 0) + 30
+-- The mark itself around a rectangle, in its style.
+local function drawStyle(m, x, y, w, h)
+	local c = toneOf(m)
+	local style = m.style or (m.kind == "node" and "ring" or "outline")
+	local a = Marks.Pulse(style)
+	if style == "glow" then
+		for i = 4, 1, -1 do frame(c, x - i * 3, y - i * 3, w + i * 6, h + i * 6, 3, a * 0.12 * (5 - i)) end
+		frame(c, x, y, w, h, 2, a)
+	elseif style == "arrow" then
+		frame(c, x, y, w, h, 2, 0.8)
+		-- an arrow from the left pointing at the target
+		local ax, ay = x - 46, y + h / 2
+		SetDrawColor(c[1], c[2], c[3], a)
+		DrawImage(nil, ax, ay - 3, 30, 6)
+		for i = 0, 10 do DrawImage(nil, ax + 30 + i, ay - 10 + i, 1, 20 - i * 2) end
+	else
+		frame(c, x, y, w, h, style == "ring" and 4 or 3, a)
+	end
+end
+
+-- Dim everything in the view port except one rectangle (the spotlight).
+local function spotlight(viewPort, x, y, w, h)
+	local pad = 12
+	x, y, w, h = x - pad, y - pad, w + pad * 2, h + pad * 2
+	SetDrawColor(0, 0, 0, 0.55)
+	local vx, vy, vw, vh = viewPort.x, viewPort.y, viewPort.width, viewPort.height
+	DrawImage(nil, vx, vy, vw, m_max(0, y - vy))
+	DrawImage(nil, vx, y + h, vw, m_max(0, vy + vh - y - h))
+	DrawImage(nil, vx, y, m_max(0, x - vx), h)
+	DrawImage(nil, x + w, y, m_max(0, vx + vw - x - w), h)
+end
+
+-- The gain tag ("+2.7% DPS / +15% EHP"), from PoB (the mark's ops simulated with what_if).
+function Marks.GainTag(g)
+	if not g then return nil end
+	local parts = { }
+	local function p(v, what) if v and math.abs(v) >= 0.05 then t_insert(parts, string.format("%s%.1f%% %s", v > 0 and "+" or "", v, what)) end end
+	p(g.dpsPct, "DPS") p(g.ehpPct, "EHP") p(g.hitPct, "max hit")
+	return #parts > 0 and table.concat(parts, " / ") or "no change in PoB"
+end
+
+-- The lines of a mark's box (also used by the tests).
+function Marks.BoxLines(build, m)
+	local c = toneOf(m)
+	local L = { { size = 16, text = "^7" .. (m.text or m.label) } }
+	if m.text then t_insert(L, { size = 12, text = "^8" .. m.label }) end
+	if m.gain then t_insert(L, { size = 14, text = (m.gain.good and "^x009E73" or "^xD55E00") .. m.gain.tag }) end
+	if m.lines then
+		for i, l in ipairs(m.lines) do
+			if i == m.lineIndex then t_insert(L, { size = 14, text = c[4] .. "> " .. l })
+			elseif math.abs(i - m.lineIndex) <= 2 then t_insert(L, { size = 12, text = "^8  " .. l }) end
+		end
+	end
+	if m.candidate then
+		t_insert(L, { size = 12, text = "^7Replaces: " .. tostring(m.candidate.replaces or "nothing") })
+		for _, d in ipairs(m.candidate.deltas or { }) do t_insert(L, { size = 12, text = (d.good and "^x009E73" or "^xD55E00") .. d.text }) end
+	end
+	if m.to then t_insert(L, { size = 14, text = "^7swap ^x" .. (m.socket == "red" and "FF6060" or m.socket == "green" and "60D060" or m.socket == "blue" and "7090FF" or "DDDDDD") .. (build and m.label:match("^(.-) %(") or m.target) .. " ^7-> " .. ((m.toSocket == "red" and "^xFF6060") or (m.toSocket == "green" and "^x60D060") or (m.toSocket == "blue" and "^x7090FF") or "^xDDDDDD") .. m.to .. " ^8(" .. tostring(m.toSocket or "?") .. " socket)" }) end
+	if m.socket and not m.to then t_insert(L, { size = 12, text = "^8" .. m.socket .. " socket" }) end
+	if m.toSlot then t_insert(L, { size = 12, text = "^7move to: " .. m.toSlot .. (m.fromSlot and (" ^8(now: " .. m.fromSlot .. ")") or "") }) end
+	return L
+end
+
+-- The numbered box beside a mark (with Next / Back on a tour). Returns its rectangles.
+local function badge(build, m, x, y, maxRight)
+	local c = toneOf(m)
+	local L = Marks.BoxLines(build, m)
+	local w, h = 0, 6
+	for _, l in ipairs(L) do w = m_max(w, DrawStringWidth(l.size, "VAR", l.text)) h = h + l.size + 2 end
+	local tour = build.agentTour
+	if tour then h = h + 24 end
+	w = m_max(w, tour and 170 or 0) + 34
 	if maxRight and x + w > maxRight then x = maxRight - w end
-	local h = sub and 36 or 22
-	SetDrawColor(COL[1], COL[2], COL[3])
+	SetDrawColor(c[1], c[2], c[3])
 	DrawImage(nil, x, y, w, h)
 	SetDrawColor(0.05, 0.05, 0.07, 0.95)
-	DrawImage(nil, x + 22, y + 1, w - 23, h - 2)
-	DrawString(x + 6, y + 3, "LEFT", 16, "VAR BOLD", "^x000000" .. m.n)
-	DrawString(x + 27, y + 3, "LEFT", 16, "VAR", "^7" .. (m.text or m.label))
-	if sub then DrawString(x + 27, y + 20, "LEFT", 12, "VAR", "^8" .. sub) end
-	return { x = x, y = y, w = w, h = h }
+	DrawImage(nil, x + 24, y + 1, w - 25, h - 2)
+	DrawString(x + 5, y + 3, "LEFT", 16, "VAR BOLD", "^x000000" .. m.n)
+	local ly = y + 3
+	for _, l in ipairs(L) do DrawString(x + 29, ly, "LEFT", l.size, "VAR", l.text) ly = ly + l.size + 2 end
+	local out = { box = { x = x, y = y, w = w, h = h } }
+	if tour then
+		local by = y + h - 22
+		out.back = { x = x + 29, y = by, w = 60, h = 18 }
+		out.next = { x = x + 95, y = by, w = 60, h = 18 }
+		for _, b in ipairs({ { out.back, "< Back", tour.step > 1 }, { out.next, tour.step < #build.agentMarks and "Next >" or "Done", true } }) do
+			local r = b[1]
+			SetDrawColor(c[1], c[2], c[3], b[3] and 1 or 0.3)
+			DrawImage(nil, r.x, r.y, r.w, r.h)
+			SetDrawColor(0.1, 0.1, 0.12)
+			DrawImage(nil, r.x + 1, r.y + 1, r.w - 2, r.h - 2)
+			DrawString(r.x + r.w / 2, r.y + 2, "CENTER_X", 14, "VAR", (b[3] and "^7" or "^8") .. b[2])
+		end
+		DrawString(x + 165, by + 2, "LEFT", 12, "VAR", "^8" .. tour.step .. " of " .. #build.agentMarks)
+	end
+	return out
+end
+
+-- A click on a box: Next / Back on a tour, else dismiss the mark.
+local function click(build, hits, cx, cy)
+	local function inside(r) return r and cx >= r.x and cx < r.x + r.w and cy >= r.y and cy < r.y + r.h end
+	for m, r in pairs(hits) do
+		if inside(r.next) then
+			if build.agentTour.step >= #build.agentMarks then Marks.Clear(build) else Marks.Step(build, 1) end
+			return true
+		elseif inside(r.back) then Marks.Step(build, -1) return true
+		elseif inside(r.box) then
+			if build.agentTour then Marks.Clear(build) else Marks.Dismiss(build, m) end
+			return true
+		end
+	end
 end
 
 -- Where a mark's control is on screen (Items, Skills, Configuration, Calcs), or nil.
-local function controlRect(build, m)
+local function controlRect(build, m, which)
 	local control
 	if m.kind == "slot" or m.kind == "flask" then control = build.itemsTab.slots[m.slot]
 	elseif m.kind == "gem" then
 		local tab = build.skillsTab
 		local group = tab.socketGroupList[m.group]
 		if group and tab.displayGroup ~= group then tab:SetDisplayGroup(group) end
-		control = m.gem and tab.gemSlots[m.gem] and tab.gemSlots[m.gem].nameSpec or tab.controls.groupList
+		if which == "toSlot" then control = tab.controls.groupSlot
+		else control = m.gem and tab.gemSlots[m.gem] and tab.gemSlots[m.gem].nameSpec or tab.controls.groupList end
 	elseif m.kind == "config" then control = build.configTab.varControls[m.var]
 	elseif m.kind == "calcs" then
 		for _, section in ipairs(build.calcsTab.sectionList) do
@@ -262,52 +492,88 @@ local function controlRect(build, m)
 	return x, y, w, h
 end
 
--- Draw the marks of the visible tab (not the tree: PassiveTreeView draws those) and the
--- "Clear AI marks" button. Clicks on a mark's box dismiss it.
+local function buttonRow(build, viewPort)
+	local list = build.agentMarks
+	local labels = { "Clear AI marks (" .. #list .. ")", Marks.ReducedMotion() and "Motion: off" or "Motion: on" }
+	local x, out = viewPort.x + viewPort.width - 8, { }
+	for i = #labels, 1, -1 do
+		local w = DrawStringWidth(14, "VAR", labels[i]) + 16
+		x = x - w
+		out[i] = { x = x, y = viewPort.y + 6, w = w, h = 22, label = labels[i] }
+		x = x - 6
+	end
+	for _, b in ipairs(out) do
+		local c = Marks.TONES.none
+		SetDrawColor(c[1], c[2], c[3])
+		DrawImage(nil, b.x, b.y, b.w, b.h)
+		SetDrawColor(0.08, 0.08, 0.1)
+		DrawImage(nil, b.x + 1, b.y + 1, b.w - 2, b.h - 2)
+		DrawString(b.x + 8, b.y + 4, "LEFT", 14, "VAR", "^7" .. b.label)
+	end
+	return out
+end
+
+-- Draw the marks of the visible tab (the tree's are drawn by PassiveTreeView) and the
+-- Clear / Motion buttons. Clicks on a box: Next / Back on a tour, else dismiss.
 function Marks.Draw(build, viewPort, inputEvents)
 	local list = build.agentMarks
 	if not list or #list == 0 then return end
 	SetDrawLayer(nil, 90)
-	local a = pulse()
 	local cx, cy = GetCursorPos()
-	local hit = { }
+	local hits = { }
+	local visible = Marks.Visible(build)
 	if build.viewMode ~= "TREE" then
-		for _, m in ipairs(list) do
+		for _, m in ipairs(visible) do
 			if m.view == build.viewMode then
 				local x, y, w, h = controlRect(build, m)
 				if x then
-					outline(x, y, w, h, 3, a)
-					hit[m] = badge(m, x + w + 10, y + h / 2 - 11, viewPort.x + viewPort.width - 4)
+					if build.agentTour or #list == 1 then spotlight(viewPort, x, y, w, h) end
+					drawStyle(m, x, y, w, h)
+					if m.toSlot then
+						local tx, ty, tw, th = controlRect(build, m, "toSlot")
+						if tx then drawStyle({ tone = "do", style = "arrow", kind = "gem" }, tx, ty, tw, th) end
+					end
+					hits[m] = badge(build, m, x + w + 12, y + h / 2 - 11, viewPort.x + viewPort.width - 4)
 				end
 			end
 		end
 	end
-	-- Clear button (top right of the tab) and a hint for marks on other tabs.
-	local label = "Clear AI marks (" .. #list .. ")"
-	local bw = DrawStringWidth(14, "VAR", label) + 16
-	local bx, by = viewPort.x + viewPort.width - bw - 8, viewPort.y + 6
-	SetDrawColor(COL[1], COL[2], COL[3])
-	DrawImage(nil, bx, by, bw, 22)
-	SetDrawColor(0.08, 0.08, 0.1)
-	DrawImage(nil, bx + 1, by + 1, bw - 2, 20)
-	DrawString(bx + 8, by + 4, "LEFT", 14, "VAR", "^7" .. label)
+	local buttons = buttonRow(build, viewPort)
 	local others = { }
-	for _, m in ipairs(list) do if m.view ~= build.viewMode then t_insert(others, m.n .. " on " .. m.view:sub(1, 1) .. m.view:sub(2):lower()) end end
-	if #others > 0 then DrawString(bx - 8, by + 4, "RIGHT", 14, "VAR", "^xFFC830AI marks: " .. table.concat(others, ", ")) end
+	for _, m in ipairs(visible) do if m.view ~= build.viewMode then t_insert(others, m.n .. " on " .. m.view:sub(1, 1) .. m.view:sub(2):lower()) end end
+	if #others > 0 then DrawString(buttons[1].x - 8, buttons[1].y + 4, "RIGHT", 14, "VAR", "^xE69F00AI marks: " .. table.concat(others, ", ")) end
 	for id, event in ipairs(inputEvents or { }) do
 		if event.type == "KeyUp" and event.key == "LEFTBUTTON" then
-			if cx >= bx and cx < bx + bw and cy >= by and cy < by + 22 then
-				Marks.Clear(build)
-				inputEvents[id] = nil
-				return
-			end
-			for m, r in pairs(hit) do
-				if cx >= r.x and cx < r.x + r.w and cy >= r.y and cy < r.y + r.h then
-					Marks.Dismiss(build, m)
-					inputEvents[id] = nil
-					return
-				end
-			end
+			local function on(r) return cx >= r.x and cx < r.x + r.w and cy >= r.y and cy < r.y + r.h end
+			if on(buttons[1]) then Marks.Clear(build) inputEvents[id] = nil return end
+			if on(buttons[2]) then Marks.SetReducedMotion(not Marks.ReducedMotion()) inputEvents[id] = nil return end
+			if click(build, hits, cx, cy) then inputEvents[id] = nil return end
+		end
+	end
+end
+
+-- "Show AI marks again": a small button for a minute after the marks were cleared.
+Marks.AGAIN_MS = 60000
+function Marks.DrawAgain(build, viewPort, inputEvents)
+	local h = build.agentMarksHistory
+	local at = build.agentMarksClearedAt
+	if not h or #h == 0 or not at or (GetTime() - at) > Marks.AGAIN_MS then return end
+	local label = "Show AI marks again"
+	local w = DrawStringWidth(14, "VAR", label) + 16
+	local r = { x = viewPort.x + viewPort.width - w - 8, y = viewPort.y + 6, w = w, h = 22 }
+	SetDrawLayer(nil, 90)
+	local c = Marks.TONES.none
+	SetDrawColor(c[1], c[2], c[3], 0.7)
+	DrawImage(nil, r.x, r.y, r.w, r.h)
+	SetDrawColor(0.08, 0.08, 0.1)
+	DrawImage(nil, r.x + 1, r.y + 1, r.w - 2, r.h - 2)
+	DrawString(r.x + 8, r.y + 4, "LEFT", 14, "VAR", "^7" .. label)
+	local cx, cy = GetCursorPos()
+	for id, event in ipairs(inputEvents or { }) do
+		if event.type == "KeyUp" and event.key == "LEFTBUTTON" and cx >= r.x and cx < r.x + r.w and cy >= r.y and cy < r.y + r.h then
+			Marks.Again(build, 1)
+			inputEvents[id] = nil
+			return
 		end
 	end
 end
@@ -315,44 +581,44 @@ end
 function Marks.Dismiss(build, mark)
 	local keep = { }
 	for _, m in ipairs(build.agentMarks or { }) do if m ~= mark then t_insert(keep, m) end end
-	build.agentMarks = #keep > 0 and keep or nil
+	for i, m in ipairs(keep) do m.n = i end
+	if #keep == 0 then Marks.Clear(build) else build.agentMarks = keep end
 end
 
--- Tree marks (called by PassiveTreeView with its coordinates): a pulsing ring on the node,
--- rings on its path from the allocated tree, and the numbered box.
+-- Tree marks (called by PassiveTreeView with its coordinates): the mark on the node, its
+-- route from the allocated tree lit and numbered in the order to take it, the box, and a
+-- spotlight on a single mark or a tour step.
 function Marks.DrawTree(build, spec, treeToScreen, scale, viewPort, inputEvents)
 	local list = build.agentMarks
 	if not list then return end
 	SetDrawLayer(nil, 35)
-	local a = pulse()
 	local cx, cy = GetCursorPos()
-	local hit = { }
-	for _, m in ipairs(list) do
+	local hits = { }
+	local visible = Marks.Visible(build)
+	for _, m in ipairs(visible) do
 		local node = m.kind == "node" and spec.nodes[m.node]
 		if node and node.x then
-			for _, pid in ipairs(m.path or { }) do
+			local sx, sy = treeToScreen(node.x, node.y)
+			local r = m_max(12, (node.size or 50) * scale * 0.8)
+			if build.agentTour or #list == 1 then spotlight(viewPort, sx - r, sy - r, r * 2, r * 2) end
+			local c = toneOf(m)
+			for i, pid in ipairs(m.path or { }) do
 				local p = spec.nodes[pid]
 				if p and p.x and p ~= node then
 					local px, py = treeToScreen(p.x, p.y)
-					local r = m_max(6, (p.size or 30) * scale * 0.55)
-					outline(px - r, py - r, r * 2, r * 2, 2, a * 0.7)
+					local pr = m_max(7, (p.size or 30) * scale * 0.55)
+					frame(c, px - pr, py - pr, pr * 2, pr * 2, 2, 0.85)
+					DrawString(px, py - pr - 16, "CENTER_X", 14, "VAR BOLD", c[4] .. i)
 				end
 			end
-			local sx, sy = treeToScreen(node.x, node.y)
-			local r = m_max(12, (node.size or 50) * scale * 0.8)
-			outline(sx - r, sy - r, r * 2, r * 2, 4, a)
-			hit[m] = badge(m, sx + r + 10, sy - 11, viewPort.x + viewPort.width - 4)
+			drawStyle(m, sx - r, sy - r, r * 2, r * 2)
+			hits[m] = badge(build, m, sx + r + 10, sy - 11, viewPort.x + viewPort.width - 4)
 		end
 	end
 	for id, event in ipairs(inputEvents or { }) do
-		if event.type == "KeyUp" and event.key == "LEFTBUTTON" then
-			for m, rect in pairs(hit) do
-				if cx >= rect.x and cx < rect.x + rect.w and cy >= rect.y and cy < rect.y + rect.h then
-					Marks.Dismiss(build, m)
-					inputEvents[id] = nil
-					return
-				end
-			end
+		if event.type == "KeyUp" and event.key == "LEFTBUTTON" and click(build, hits, cx, cy) then
+			inputEvents[id] = nil
+			return
 		end
 	end
 end
@@ -361,7 +627,13 @@ end
 function Marks.Describe(m)
 	local where = ({ TREE = "passive tree", ITEMS = "Items tab", SKILLS = "Skills tab", CONFIG = "Configuration tab", CALCS = "Calcs tab" })[m.view] or m.view
 	local extra = m.kind == "node" and (", " .. m.where) or ""
-	return string.format("%d. %s (%s, %s%s)%s", m.n, m.label, m.kind, where, extra, m.text and (": " .. m.text) or "")
+	local bits = { }
+	if m.line then t_insert(bits, 'line "' .. m.line .. '"') end
+	if m.to then t_insert(bits, "swap for " .. m.to .. " (" .. tostring(m.toSocket) .. " socket; now " .. tostring(m.socket) .. ")") end
+	if m.toSlot then t_insert(bits, "move to " .. m.toSlot) end
+	if m.gain then t_insert(bits, m.gain.tag) end
+	if m.candidate then t_insert(bits, "replaces " .. tostring(m.candidate.replaces)) end
+	return string.format("%d. %s (%s, %s%s)%s%s", m.n, m.label, m.kind, where, extra, m.text and (": " .. m.text) or "", #bits > 0 and (" [" .. table.concat(bits, "; ") .. "]") or "")
 end
 
 return Marks
