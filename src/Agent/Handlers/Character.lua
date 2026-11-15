@@ -14,6 +14,135 @@ local function strip(text)
 	return (tostring(text or ''):gsub('%^x%x%x%x%x%x%x', ''):gsub('%^%d', ''))
 end
 
+-- Skills that are not a damage skill: auras, heralds and other reservations,
+-- buffs, curses, warcries, guards and movement skills. A sync never picks one
+-- of these as the main skill, and their "DPS" is not compared between syncs.
+local function isUtility(effect)
+	local t = effect and effect.skillTypes
+	if not t then return true end
+	if t[SkillType.HasReservation] or t[SkillType.Aura] or t[SkillType.Herald] or t[SkillType.Guard]
+		or t[SkillType.Warcry] or t[SkillType.Travel] or t[SkillType.Blink] or t[SkillType.Movement] then
+		return true
+	end
+	if (t[SkillType.Buff] or t[SkillType.AppliesCurse]) and not (t[SkillType.Damage] or t[SkillType.Attack] or t[SkillType.DamageOverTime]) then return true end
+	return not (t[SkillType.Attack] or t[SkillType.Spell] or t[SkillType.Damage] or t[SkillType.DamageOverTime] or t[SkillType.CreatesMinion])
+end
+
+local function mainEffect()
+	local env = build.calcsTab and build.calcsTab.mainEnv
+	local skill = env and env.player and env.player.mainSkill
+	return skill and skill.activeEffect and skill.activeEffect.grantedEffect
+end
+
+local function mainIsDamage()
+	local effect = mainEffect()
+	if not effect then return nil end
+	return not isUtility(effect)
+end
+
+local function skillDps(o)
+	if not o then return 0 end
+	local v = tonumber(o.CombinedDPS) or tonumber(o.TotalDPS) or 0
+	local m = type(o.Minion) == 'table' and (tonumber(o.Minion.CombinedDPS) or tonumber(o.Minion.TotalDPS)) or 0
+	return math.max(v, m)
+end
+
+-- The main skill before an import: the active gem's name, its group's supports and slot.
+local function mainSkillRecord()
+	local name = h.mainSkillName()
+	if not name then return nil end
+	local g = build.skillsTab.socketGroupList[build.mainSocketGroup]
+	local supports = {}
+	for _, gem in ipairs(g and g.gemList or {}) do
+		local gd = gem.gemData
+		if gd and gd.grantedEffect and gd.grantedEffect.support then supports[gd.name] = true end
+	end
+	return { name = name, supports = supports, slot = g and g.slot }
+end
+
+-- After an import the socket groups can be in another order (the game lists
+-- them by item), so PoB's index of the main group may point at an aura. Pick
+-- the group whose active gem has the old main skill's name (most supports in
+-- common, then same slot); without one, the damage skill with the highest DPS.
+local function restoreMainSkill(old)
+	h.mainOutput()
+	local best, bestScore
+	if old then
+		for gi, g in ipairs(build.skillsTab.socketGroupList) do
+			local supports = {}
+			for _, gem in ipairs(g.gemList or {}) do
+				local gd = gem.gemData
+				if gd and gd.grantedEffect and gd.grantedEffect.support then supports[gd.name] = true end
+			end
+			for ji, sk in ipairs(g.displaySkillList or {}) do
+				local effect = sk.activeEffect and sk.activeEffect.grantedEffect
+				if effect and effect.name == old.name then
+					local score = (g.enabled ~= false and 1000 or 0) + (g.slot == old.slot and 1 or 0)
+					for name in pairs(supports) do if old.supports[name] then score = score + 10 end end
+					if not bestScore or score > bestScore then best, bestScore = { gi, ji }, score end
+				end
+			end
+		end
+	end
+	if best then
+		Ops.set_main_selection({ mainSocketGroup = best[1], mainActiveSkill = best[2] })
+		return old.name == h.mainSkillName() and 'kept' or nil
+	end
+	if mainIsDamage() and not old then return nil end
+	-- The old main skill is gone (or there was none and PoB guessed an aura): highest DPS damage skill.
+	local cands = {}
+	for gi, g in ipairs(build.skillsTab.socketGroupList) do
+		if g.enabled ~= false then
+			for ji, sk in ipairs(g.displaySkillList or {}) do
+				local effect = sk.activeEffect and sk.activeEffect.grantedEffect
+				if effect and not isUtility(effect) then t_insert(cands, { gi, ji }) end
+			end
+		end
+	end
+	local pick, pickDps
+	for _, c in ipairs(cands) do
+		Ops.set_main_selection({ mainSocketGroup = c[1], mainActiveSkill = c[2] })
+		local d = skillDps(h.mainOutput())
+		if not pickDps or d > pickDps then pick, pickDps = c, d end
+	end
+	if pick then
+		Ops.set_main_selection({ mainSocketGroup = pick[1], mainActiveSkill = pick[2] })
+		return 'highest_dps'
+	end
+	return nil
+end
+
+-- Reservation gems (auras, heralds, ...) that were not in the build before the
+-- import, switched on: the game does not say if they run. For each, unreserved
+-- mana and life with it on and with it off (simulated, put back).
+local function newReservers(oldGems)
+	local out = {}
+	if not oldGems then return out end
+	local seen = {}
+	for gi, g in ipairs(build.skillsTab.socketGroupList) do
+		for ji, gem in ipairs(g.gemList or {}) do
+			local gd = gem.gemData
+			local effect = gd and gd.grantedEffect
+			if effect and not effect.support and effect.skillTypes and effect.skillTypes[SkillType.HasReservation]
+				and not oldGems[gd.name] and not seen[gd.name] and gem.enabled ~= false and g.enabled ~= false then
+				seen[gd.name] = true
+				local on = h.mainOutput() or {}
+				local onMana, onLife = tonumber(on.ManaUnreserved), tonumber(on.LifeUnreserved)
+				gem.enabled = false
+				build.buildFlag = true
+				local off = h.mainOutput() or {}
+				local offMana, offLife = tonumber(off.ManaUnreserved), tonumber(off.LifeUnreserved)
+				gem.enabled = true
+				build.buildFlag = true
+				h.mainOutput()
+				t_insert(out, { name = gd.name, group = gi, gem = ji, manaOn = onMana, manaOff = offMana, lifeOn = onLife, lifeOff = offLife,
+					mana = tonumber(on.Mana) })
+			end
+		end
+	end
+	return out
+end
+
 -- What a character looks like for progress tracking: level, stats, items, gems, passives.
 local function characterState()
 	local spec = build.spec
@@ -23,6 +152,7 @@ local function characterState()
 		className = spec.curClassName,
 		ascendancy = spec.curAscendClassName,
 		mainSkill = h.mainSkillName(),
+		mainSkillDamage = mainIsDamage(),
 		stats = h.keyStats(),
 		assumptions = h.assumptions(),
 		characterHash = build.importTab and build.importTab.lastCharacterHash or nil,
@@ -117,6 +247,16 @@ handlers.character_import = function(params)
 			end
 		end
 	end
+	-- What the build had before: main skill (by gem name, not group number) and skill gems.
+	h.mainOutput()
+	local oldMain = mainSkillRecord()
+	local oldGems
+	for _, g in ipairs(build.skillsTab.socketGroupList or {}) do
+		for _, gem in ipairs(g.gemList or {}) do
+			local gd = gem.gemData
+			if gd and gd.name then oldGems = oldGems or {} oldGems[gd.name] = true end
+		end
+	end
 	local ok, err = pcall(function()
 		-- Same shape PoB builds from the account-name endpoints (ImportTab:DownloadPassiveTree/DownloadItems).
 		local base = {}
@@ -154,7 +294,11 @@ handlers.character_import = function(params)
 	build.buildFlag = true
 	local output, outErr = h.mainOutput()
 	if not output then return { ok = false, error = outErr } end
-	return { ok = true, state = characterState(), keptOff = keptOff }
+	local mainPick = restoreMainSkill(oldMain)
+	local reservers = newReservers(oldGems)
+	h.mainOutput()
+	return { ok = true, state = characterState(), keptOff = keptOff, newReservers = reservers,
+		mainSkillBefore = oldMain and oldMain.name or nil, mainSkillPick = mainPick }
 end
 
 -- Fight settings (Configuration tab) and which skill gems are switched on: what
@@ -188,7 +332,10 @@ handlers.config_profile = function()
 	if not build or not build.configTab then return { ok = false, error = 'no build open in PoB' } end
 	h.mainOutput()
 	local config, gems = fightSettings()
-	return { ok = true, config = config, gems = gems, mainSkill = h.mainSkillName(),
+	-- Bandit and pantheon: not in the public character profile, so a sync can only keep what the build has.
+	local input = build.configTab.input or {}
+	local importer = { bandit = input.bandit or 'None', pantheonMajorGod = input.pantheonMajorGod or 'None', pantheonMinorGod = input.pantheonMinorGod or 'None' }
+	return { ok = true, config = config, gems = gems, importer = importer, mainSkill = h.mainSkillName(),
 		className = build.spec.curClassName, ascendancy = build.spec.curAscendClassName }
 end
 

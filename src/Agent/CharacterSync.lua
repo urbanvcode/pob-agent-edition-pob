@@ -175,7 +175,12 @@ local function summary(before, after)
 	if not before then return "first sync" end
 	local parts = {}
 	if before.level ~= after.level then table.insert(parts, string.format("level %s->%s", tostring(before.level), tostring(after.level))) end
-	local d = pctChange(dpsOf(before.stats or {}), dpsOf(after.stats or {}))
+	-- A DPS change means nothing when the main skill changed to or from an aura (or another non-damage skill).
+	local comparable = before.mainSkillDamage ~= false and after.mainSkillDamage ~= false and (before.mainSkill == nil) == (after.mainSkill == nil)
+	if (before.mainSkill or "") ~= (after.mainSkill or "") then
+		table.insert(parts, string.format("main skill %s -> %s", before.mainSkill or "none", after.mainSkill or "none"))
+	end
+	local d = comparable and pctChange(dpsOf(before.stats or {}), dpsOf(after.stats or {}))
 	if d then table.insert(parts, "DPS " .. d) end
 	local e = pctChange((before.stats or {}).TotalEHP, (after.stats or {}).TotalEHP or 0)
 	if e then table.insert(parts, "EHP " .. e) end
