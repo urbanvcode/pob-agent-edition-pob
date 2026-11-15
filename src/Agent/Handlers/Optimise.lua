@@ -419,6 +419,43 @@ handlers.optimise = function(params)
 			if not okCalc or type(o) ~= 'table' then return nil end
 			return metrics(o)
 		end
+		-- Passives, masteries and respecs are measured with PoB's fast calculator, which has
+		-- no skill-cost check: a tree change that takes away mana (a Mana Mastery, an
+		-- "increased maximum Mana" passive) can leave a mark or a spell unusable while the
+		-- paper number still counts it. Each one that is about to be suggested is applied
+		-- once for real (the same check the aura lever runs); one that blocks a skill
+		-- comes back ranked by its real result (realResult), else the gain stays as it was.
+		-- Returns the gain to rank and, when no real result is worth suggesting, why not.
+		local function manaChecked(lever, ops, g)
+			local s = capture()
+			local results, failed = applyOps(ops)
+			local okR, rep = true, nil
+			local paper
+			if failed == 0 then
+				paper = metrics(recalc())
+				okR, rep = pcall(costReport, baseCost, metrics)
+			end
+			local real = okR and rep and realResult(paper, rep) or nil
+			local errs = restore(s)
+			counted('mana check')
+			if #errs > 0 then error('could not restore the build: ' .. table.concat(errs, '; ')) end
+			if not real then return g end
+			local rg = gainOf(base, real)
+			local names = {}
+			for _, cw in ipairs(real.cost.warnings) do t_insert(names, cw.skill) end
+			if not real.cost.fix then
+				return rg, string.format('leaves %s without enough mana to use and no single reserving skill to switch off makes it fit (paper gain %.1f)', table.concat(names, ', '), real.cost.paperScore)
+			end
+			if scoreOf(rg, w) <= 0.05 then
+				return rg, string.format('leaves %s without enough mana to use: paper gain %.1f, real result %.1f even with the best fix (%s)',
+					table.concat(names, ', '), real.cost.paperScore, scoreOf(rg, w), real.cost.fix.text)
+			end
+			return rg
+		end
+		-- A blocked tree change, shown under "would help but cannot be used now" with its paper gain.
+		local function manaBlocked(lever, name, g, why)
+			t_insert(blocked, { lever = lever, name = name, gain = g, score = scoreOf(g, w), why = why, mana = true })
+		end
 
 		local spec = build.spec
 		local tree = treeSummary()
@@ -450,10 +487,13 @@ handlers.optimise = function(params)
 				t_sort(additions, function(a, b) return a.score / a.points > b.score / b.points end)
 				local n = 0
 				for _, a in ipairs(additions) do
-					if a.score > 0.05 and n < 8 then
+					local g, why
+					if a.score > 0.05 and n < 8 then g, why = manaChecked('passives', { a.op }, a.gain) end
+					if why then manaBlocked(a.type == 'Mastery' and 'mastery' or 'passive', a.name, a.gain, why) end
+					if g and not why then
 						n = n + 1
 						-- points = PoB's pathDist: the node itself plus every unallocated node on the way.
-						add(a.type == 'Mastery' and 'mastery' or 'passive', a.name .. (a.type == 'Keystone' and ' (keystone)' or ''), a.gain, a.points,
+						add(a.type == 'Mastery' and 'mastery' or 'passive', a.name .. (a.type == 'Keystone' and ' (keystone)' or ''), g, a.points,
 							{ id = a.node.id, effect = a.effect, points = a.points, stats = a.stats, kind = a.type, ops = { a.op },
 							  cost = { points = a.points, path = a.points > 1 or nil, via = a.via, free = pointsFree >= a.points or nil } })
 					end
@@ -465,8 +505,11 @@ handlers.optimise = function(params)
 					t_sort(ascAdditions, function(a, b) return a.score / a.points > b.score / b.points end)
 					ascInfo.suggestions = {}
 					for _, a in ipairs(ascAdditions) do
-						if a.score > 0.05 and #ascInfo.suggestions < 4 then
-							local c = add('ascendancy', a.name, a.gain, a.points,
+						local g, why
+						if a.score > 0.05 and #ascInfo.suggestions < 4 then g, why = manaChecked('ascendancy', { a.op }, a.gain) end
+						if why then manaBlocked('ascendancy', a.name, a.gain, why) end
+						if g and not why then
+							local c = add('ascendancy', a.name, g, a.points,
 								{ id = a.node.id, points = a.points, stats = a.stats, kind = a.type, ops = { a.op }, ascendancyName = a.node.ascendancyName,
 								  cost = { ascendancy = a.points, path = a.points > 1 or nil, via = a.via } })
 							if c and suggestions[#suggestions] == c then
@@ -504,11 +547,15 @@ handlers.optimise = function(params)
 					end
 				end
 				t_sort(masteryTries, function(a, b) return a.score > b.score end)
-				for i = 1, m_min(3, #masteryTries) do
-					local t = masteryTries[i]
-					add('mastery', 'Change the effect of ' .. (t.node.dn or t.node.name), t.gain, 1,
+				local swaps = 0
+				for _, t in ipairs(masteryTries) do
+					if swaps >= 3 then break end
+					local text = 'Change the effect of ' .. (t.node.dn or t.node.name)
+					local g, why = manaChecked('passives', { { op = 'mastery', node = t.node.id, effect = t.effect } }, t.gain)
+					if why then manaBlocked('mastery', text, t.gain, why) else swaps = swaps + 1 end
+					if not why then add('mastery', text, g, 1,
 						{ id = t.node.id, effect = t.effect, stats = t.stats, kind = 'mastery swap', ops = { { op = 'mastery', node = t.node.id, effect = t.effect } },
-						  cost = { note = 'changing a mastery effect: cost not verified (kb_lookup "mastery")' } })
+						  cost = { note = 'changing a mastery effect: cost not verified (kb_lookup "mastery")' } }) end
 				end
 			end
 		end
@@ -545,22 +592,36 @@ handlers.optimise = function(params)
 				local key = table.concat(r.names, ',')
 				if not seenRemoval[key] then
 					seenRemoval[key] = true
+					local manaTries = 0
 					for _, a in ipairs(additions) do
 						if a.points <= r.points + m_max(pointsFree, 0) and a.score > r.loss + 0.2 then
 							local overlap = false
 							for dep in pairs(r.R) do if a.ids[dep.id] then overlap = true end end
 							if not overlap then
 								local m = miscTrial('respec', { removeNodes = r.R, addNodes = a.pathNodes })
+								local why
 								if m then
 									local g = gainOf(base, m)
 									if scoreOf(g, w) > 0.3 then
-										made = made + 1
-										add('respec', 'Respec ' .. table.concat(r.names, ', ') .. ' (' .. r.points .. ' points) into ' .. a.name .. ' (' .. a.points .. ' points)', g, r.points,
-											{ id = a.node.id, points = a.points, refund = r.points, stats = a.stats, removed = r.names,
-											  ops = { { op = 'dealloc', node = r.node.id }, a.op }, cost = { regret = r.points } })
+										local text = 'Respec ' .. table.concat(r.names, ', ') .. ' (' .. r.points .. ' points) into ' .. a.name .. ' (' .. a.points .. ' points)'
+										local ops = { { op = 'dealloc', node = r.node.id }, a.op }
+										-- Taking out a mana node (Mana Mastery, increased maximum Mana) can leave a
+										-- mark or spell without mana to use: checked for real, as the aura lever does.
+										local rg
+										rg, why = manaChecked('respec', ops, g)
+										if why then
+											manaBlocked('respec', text, g, why)
+										else
+											made = made + 1
+											add('respec', text, rg, r.points,
+												{ id = a.node.id, points = a.points, refund = r.points, stats = a.stats, removed = r.names,
+												  ops = ops, cost = { regret = r.points } })
+										end
 									end
 								end
-								break
+								-- Blocked by mana: the next target for the same points may fit (3 tries).
+								manaTries = why and manaTries + 1 or manaTries
+								if not why or manaTries >= 3 then break end
 							end
 						end
 					end
@@ -903,6 +964,8 @@ handlers.optimise = function(params)
 		end
 		local total = #ranked
 		while #ranked > limit do table.remove(ranked) end
+		t_sort(blocked, function(a, b) return (a.score or 0) > (b.score or 0) end)
+		while #blocked > 6 do table.remove(blocked) end
 		return {
 			ok = true, goal = goalName, goalLabel = goal.label, reason = reason, metric = goal.metric, weights = w,
 			tempConfig = tempConfig, assumptions = assumptions(), mainSkill = mainSkillName(),
