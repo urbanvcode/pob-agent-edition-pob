@@ -1171,6 +1171,11 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 		self.compareLabels.draw(self.compareLabels, spec, self.compareSpec, treeToScreen, scale, viewPort)
 		SetDrawLayer(nil, 25)
 	end
+	-- Agent Edition: "point at it" marks on the tree (Agent/Marks.lua)
+	if build.agentMarks and build.agentMarksModule then
+		build.agentMarksModule.DrawTree(build, spec, treeToScreen, scale, viewPort, inputEvents)
+		SetDrawLayer(nil, 25)
+	end
 
 	-- Draw ring overlays for jewel sockets
 	local function drawJewelRadius(jewel, scrX, scrY, tint)

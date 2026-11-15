@@ -264,6 +264,9 @@ function LiveServer:AddLiveHandlers(handlers)
 		return plan
 	end
 
+	-- Is the window in front, behind other windows or minimised (point marks say so; nothing is raised).
+	handlers.window_state = function() return { ok = true, window = windowState() } end
+
 	-- Guide tab: show it and press Analyse (same as the button).
 	handlers.guide_tab = function(params)
 		if not buildLoaded() or not build.guideTab then return { ok = false, error = "no build open in PoB" } end

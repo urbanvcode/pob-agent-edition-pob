@@ -377,3 +377,6 @@ handlers.select_tree = function(params)
 	recalc()
 	return { ok = true, title = title }
 end
+
+-- "Point at it" marks (Agent/Marks.lua)
+LoadModule("Agent/Handlers/Point", handlers)
