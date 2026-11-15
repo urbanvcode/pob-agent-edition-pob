@@ -397,6 +397,7 @@ handlers.optimise = function(params)
 		local tree = treeSummary()
 		local pointsFree = tree.pointsAtLevel - tree.pointsUsed
 		local gemLevels = {}
+		local gemAilments -- the build's own shock/chill suggest_gems counted for the support swaps
 
 		-- 2. Passives within N points (notables, keystones, masteries) with their path.
 		--    Ascendancy nodes are measured too but kept apart (ascAdditions): they cost
@@ -545,6 +546,7 @@ handlers.optimise = function(params)
 			local okG, gres = pcall(handlers.suggest_gems, { limit = 4 })
 			if okG and gres and gres.ok then
 				counted('gems')
+				gemAilments = gres.ownAilments
 				evaluated.gems = (evaluated.gems or 0) + (gres.tried or 0)
 				evaluated.total = evaluated.total + (gres.tried or 0)
 				-- suggest_gems measures combined/full DPS; that number stands in for the goal's DPS measure.
@@ -559,6 +561,10 @@ handlers.optimise = function(params)
 							{ name = c.name, warning = c.warning, group = gres.group, uncounted = gres.targetCaveat,
 							  ops = { { op = 'remove_gem', group = gres.group, gem = gres.target }, { op = 'add_gem', group = gres.group, name = c.name, level = c.level, quality = 20 } },
 							  cost = { buy = c.name, awakened = c.awakened } })
+						if sw and c.ailmentWarning then
+							sw.sideEffects = sw.sideEffects or {}
+							t_insert(sw.sideEffects, c.ailmentWarning)
+						end
 						if sw and gres.targetCaveat then
 							sw.sideEffects = sw.sideEffects or {}
 							t_insert(sw.sideEffects, gres.targetCaveat)
@@ -868,7 +874,7 @@ handlers.optimise = function(params)
 			tempConfig = tempConfig, assumptions = assumptions(), mainSkill = mainSkillName(),
 			base = { singleTargetDps = base.st, dps = base.dps, ehp = base.ehp, weakestHit = base.hit, movementSpeed = base.ms, life = base.life, missingRes = base.miss },
 			suggestions = ranked, gemLevels = gemLevels, more = total - #ranked, undercount = undercount, blocked = blocked, scaling = scaling,
-			unsetCounts = #unsetCounts > 0 and unsetCounts or nil, ascendancy = ascInfo,
+			unsetCounts = #unsetCounts > 0 and unsetCounts or nil, ascendancy = ascInfo, gemAilments = gemAilments,
 			pointsFree = pointsFree, maxPoints = maxPoints, evaluated = evaluated,
 		}
 	end)

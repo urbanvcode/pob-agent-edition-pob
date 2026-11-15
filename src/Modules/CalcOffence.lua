@@ -5312,6 +5312,8 @@ function calcs.offence(env, actor, activeSkill)
 					output[ailment.."Duration"] = ailmentData[ailment].duration * (1 + incDur / 100) * moreDur * debuffDurationMult
 					-- Line Controls Crit Conditional for Crit Mastery
 					output[ailment.."EffectMod"] = calcLib.mod(skillModList, cfg, "Enemy"..ailment.."Effect") * calcLib.mod(enemyDB, nil, "Self"..ailment.."Effect")
+					-- Agent Edition: the effect this hit inflicts on the configured enemy (the number the breakdown table shows), for agent advice
+					if enemyThreshold > 0 then output[ailment.."EffectOnHit"] = val.effect(damage, output[ailment.."EffectMod"]) end
 					if breakdown then
 						local maximum = globalOutput["Maximum"..ailment] or ailmentData[ailment].max
 						local current = m_max(m_min(globalOutput["Current"..ailment] or 0, maximum), 0)
@@ -5555,6 +5557,8 @@ function calcs.offence(env, actor, activeSkill)
 		combineStat("ShockChance", "AVERAGE")
 		combineStat("ShockDuration", "AVERAGE")
 		combineStat("ShockEffectMod", "AVERAGE")
+		combineStat("ShockEffectOnHit", "AVERAGE") -- Agent Edition
+		combineStat("ChillEffectOnHit", "AVERAGE") -- Agent Edition
 		combineStat("FreezeChance", "AVERAGE")
 		combineStat("FreezeDurationMod", "AVERAGE")
 		combineStat("ScorchChance", "AVERAGE")

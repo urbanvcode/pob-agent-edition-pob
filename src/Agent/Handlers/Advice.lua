@@ -8,6 +8,7 @@ local m_floor, m_min, m_max = math.floor, math.min, math.max
 local num, dpsOf, pctChange, strip = shared.num, shared.dpsOf, shared.pctChange, shared.strip
 local recalc, mainOutput, assumptions, mainSkillName = shared.recalc, shared.mainOutput, shared.assumptions, shared.mainSkillName
 local capture, restore = shared.capture, shared.restore
+local own = shared.ownAilments
 
 -- Run fn with the build free to be changed; whatever happens, restore it afterwards.
 local function simulate(fn)
@@ -96,7 +97,7 @@ local UNMEASURED_SUPPORTS = {
 handlers.unmeasured_support = function(name) return type(name) == 'string' and UNMEASURED_SUPPORTS[name:lower()] or nil end
 
 -- Support gems ---------------------------------------------------------------
--- params: { group?, replace? (gem number), add? (bool), awakened? (default true), limit? }
+-- params: { group?, replace? (gem number), add? (bool), awakened? (default true), limit?, only? (names: try just these; tests) }
 -- 1. What each current support is worth (DPS lost when it is switched off).
 -- 2. Every support gem that can support the skill, tried in place of the weakest
 --    one (or as an extra link), ranked by DPS.
@@ -131,6 +132,57 @@ handlers.suggest_gems = function(params)
 					t_insert(unsetCounts, { var = gap.var, label = gap.label, skill = gap.skill })
 				end
 			end
+		end
+		-- The ailments the skill inflicts by itself (shock, chill, ignite). PoB only puts them on the
+		-- enemy when the config says so, so a support that adds damage looks better than one that keeps
+		-- (or makes) the shock. Rank with them counted, as switching the config on would.
+		local input = build.configTab.input
+		local userSet = {}
+		for _, spec in ipairs(own.list) do userSet[spec.cond] = input[spec.cond] and true or nil end
+		local plainDps, plainOut = measure()
+		local baseInfl = own.inflicted(plainOut)
+		local ownCounted, ownWeak
+		do
+			local values, list, weak = own.config(baseInfl, userSet)
+			if #weak > 0 then
+				ownWeak = {}
+				for _, a in ipairs(weak) do t_insert(ownWeak, { name = a.name, effect = a.effect and m_floor(a.effect * 10 + 0.5) / 10, min = data.nonDamagingAilment[a.name] and data.nonDamagingAilment[a.name].min }) end
+			end
+			if next(values) then
+				local r = Ops.set_config(values)
+				if r and r.applied and next(r.applied) then
+					local parts = {}
+					for _, a in ipairs(list) do t_insert(parts, { name = a.name, effect = a.assumedEffect, uptime = a.uptime, chance = a.chance }) end
+					ownCounted = { list = parts, dpsPct = pctChange(measure(), plainDps) }
+				end
+			end
+		end
+		-- One change measured in place: ailments it takes away are measured without them (even when the
+		-- config sets them on the enemy); ailments it adds that the config leaves unset are counted like
+		-- the build's own. Returns dps, output, the ailments lost.
+		local function measureOwn()
+			local dps, o = measure()
+			local now = own.inflicted(o)
+			local lost = own.lost(baseInfl, now)
+			local diff = {}
+			for _, a in ipairs(lost or {}) do if input[a.cond] then diff[a.cond] = false end end
+			local gain = own.config(now, userSet)
+			for _, spec in ipairs(own.list) do
+				if now[spec.name] and not baseInfl[spec.name] and gain[spec.cond] then
+					diff[spec.cond] = true
+					if spec.effectVar and gain[spec.effectVar] then diff[spec.effectVar] = gain[spec.effectVar] end
+				end
+			end
+			if not next(diff) then return dps, o, lost end
+			local saved = {}
+			for k in pairs(diff) do saved[k] = input[k] end
+			Ops.set_config(diff)
+			local okM, changed = pcall(measure)
+			for k in pairs(diff) do input[k] = saved[k] end -- put the config back even if the measure failed
+			build.configTab:BuildModList()
+			local _, back = measure()
+			if not okM then error(changed, 0) end
+			return changed, back, lost
 		end
 		local baseDps, baseOut = measure()
 		local skillName = mainSkillName()
@@ -175,7 +227,7 @@ handlers.suggest_gems = function(params)
 			end
 			if isSupport and gem.enabled ~= false then
 				gem.enabled = false
-				local dps = measure()
+				local dps = measureOwn()
 				gem.enabled = true
 				local loss = -pctChange(dps, baseDps)
 				t_insert(current, { gem = i, name = name, level = gem.level, quality = gem.quality, lossPct = loss,
@@ -206,11 +258,16 @@ handlers.suggest_gems = function(params)
 		local activeSkill = build.calcsTab.mainEnv and build.calcsTab.mainEnv.player and build.calcsTab.mainEnv.player.mainSkill
 		local candidates, tried = {}, 0
 		local allowAwakened = params.awakened ~= false
+		local only
+		if type(params.only) == 'table' then
+			only = {}
+			for _, nm in ipairs(params.only) do only[tostring(nm):lower()] = true end
+		end
 		for _, gemData in pairs(build.data.gems) do
 			local effect = gemData.grantedEffect
 			local name = gemData.name
 			if effect and effect.support and name and not inGroup[name:lower()] and not effect.fromItem
-				and (allowAwakened or not name:match('^Awakened ')) then
+				and (not only or only[name:lower()]) and (allowAwakened or not name:match('^Awakened ')) then
 				local can = true
 				if activeSkill then
 					local okCan, r = pcall(calcLib.canGrantedEffectSupportActiveSkill, effect, activeSkill)
@@ -230,11 +287,16 @@ handlers.suggest_gems = function(params)
 					else
 						t_insert(group.gemList, instance)
 					end
-					local okCalc, dps, o = pcall(measure)
+					local okCalc, dps, o, lost = pcall(measureOwn)
 					if mode == 'replace' then group.gemList[target] = old else table.remove(group.gemList) end
 					tried = tried + 1
 					if okCalc and dps then
 						local c = { name = name, level = instance.level, dpsPct = pctChange(dps, baseDps), awakened = name:match('^Awakened ') and true or nil }
+						if lost then
+							c.lostAilments = {}
+							for _, a in ipairs(lost) do t_insert(c.lostAilments, a.name) end
+							c.ailmentWarning = 'the skill can no longer inflict ' .. (#lost > 1 and 'ailments' or lost[1].name:lower()) .. ': ' .. own.lostText(lost) .. ' (ranked without ' .. (#lost > 1 and 'them' or 'it') .. ')'
+						end
 						-- Supports that turn the skill into a mine, trap, totem or triggered skill change how it is played.
 						local flags = build.calcsTab.mainEnv and build.calcsTab.mainEnv.player.mainSkill and build.calcsTab.mainEnv.player.mainSkill.skillFlags or {}
 						for _, flag in ipairs({ 'mine', 'trap', 'totem', 'brand' }) do
@@ -244,6 +306,7 @@ handlers.suggest_gems = function(params)
 						local mana = num(o.ManaCost) or 0
 						if mana ~= baseMana then c.manaCost = mana end
 						if (num(o.ManaUnreserved) or 0) < mana and mana > 0 then c.warning = 'mana cost ' .. mana .. ' is more than the unreserved mana' end
+						if c.ailmentWarning then c.warning = (c.warning and c.warning .. '; ' or '') .. c.ailmentWarning end
 						c.attrShort = attributeShort(o, baseAttr)
 						if c.attrShort then
 							local parts = {}
@@ -279,7 +342,7 @@ handlers.suggest_gems = function(params)
 		return { ok = true, group = groupIndex, skill = skillName, baseDps = baseDps, manaCost = baseMana, current = current,
 			mode = mode, target = target, targetName = targetName, targetCaveat = targetCaveat, candidates = candidates, playstyle = playstyle, tried = tried, better = better,
 			levelUps = levelUps, characterLevel = charLevel, assumed = #assumed > 0 and assumed or nil, unsetCounts = #unsetCounts > 0 and unsetCounts or nil,
-			assumptions = assumptions() }
+			ownAilments = ownCounted, ownWeak = ownWeak, assumptions = assumptions() }
 	end)
 end
 

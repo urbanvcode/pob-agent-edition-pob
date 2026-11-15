@@ -82,6 +82,107 @@ local function mainSkillName()
 	return effect and effect.name or nil
 end
 
+-- Ailments the main skill inflicts ---------------------------------------------
+-- PoB counts a shock or chill on the enemy only when the config says so ("Is the enemy
+-- Shocked?" and its effect): a build that shocks by itself is measured as if it never did,
+-- and a support that stops the skill inflicting ailments (Elemental Focus) still gets a
+-- shock the config sets. These helpers say what the skill inflicts and how strong PoB
+-- makes it (ShockEffectOnHit / ChillEffectOnHit: the breakdown table's number for the
+-- configured enemy, exposed by an Agent Edition line in CalcOffence).
+local OWN_AILMENTS = {
+	{ name = 'Shock', cond = 'conditionEnemyShocked', effectVar = 'conditionShockEffect', duration = 2 },
+	{ name = 'Chill', cond = 'conditionEnemyChilled', effectVar = 'conditionEnemyChilledEffect', duration = 2 },
+	{ name = 'Ignite', cond = 'conditionEnemyIgnited', duration = 4 },
+	{ name = 'Freeze', cond = 'conditionEnemyFrozen', neverAssumed = true }, -- too short on bosses to count on
+}
+local function outField(o, key)
+	local v = num(o[key])
+	if v == nil and type(o.MainHand) == 'table' then v = num(o.MainHand[key]) end
+	if v == nil and type(o.OffHand) == 'table' then v = num(o.OffHand[key]) end
+	return v
+end
+-- name -> { name, cond, effectVar, chance, uptime, effect (shock/chill %, PoB's size for the enemy), tooWeak }
+local function inflictedAilments(o)
+	o = o or mainOutput()
+	local res = {}
+	if type(o) ~= 'table' then return res end
+	local ailmentData = data.nonDamagingAilment or {}
+	for _, spec in ipairs(OWN_AILMENTS) do
+		local chance = outField(o, spec.name .. 'Chance') or 0
+		local effect = spec.effectVar and outField(o, spec.name .. 'EffectOnHit')
+		if spec.name == 'Chill' then chance = effect and 100 or 0 end -- PoB: every cold hit chills
+		-- PoB works out a chance even when no damage can inflict it ("fire can shock but not ignite"):
+		-- an ignite needs ignite damage, a freeze a freeze PoB measured.
+		if spec.name == 'Ignite' and not ((outField(o, 'IgniteDPS') or 0) > 0) then chance = 0 end
+		if spec.name == 'Freeze' and not outField(o, 'FreezeDurationMod') then chance = 0 end
+		if chance > 0 then
+			local a = { name = spec.name, cond = spec.cond, effectVar = spec.effectVar, neverAssumed = spec.neverAssumed, chance = m_min(chance, 100) }
+			-- Chance the enemy has it at any moment: at least one inflicting hit within its duration.
+			local hitRate = (outField(o, 'Speed') or 0) * (outField(o, 'HitChance') or 100) / 100
+			local duration = outField(o, spec.name .. 'Duration') or spec.duration
+			a.uptime = (hitRate > 0 and duration) and (1 - (1 - a.chance / 100) ^ (hitRate * duration)) or a.chance / 100
+			if effect then
+				local info = ailmentData[spec.name] or {}
+				local max = outField(o, 'Maximum' .. spec.name) or info.max or effect
+				a.effect = m_min(effect, max)
+				a.tooWeak = info.min and a.effect < info.min or nil
+			end
+			res[spec.name] = a
+		end
+	end
+	return res
+end
+-- Ailments `before` had that `after` cannot inflict at all (a support's "cannot inflict" flag).
+local function lostAilments(before, after)
+	local lost = {}
+	for _, spec in ipairs(OWN_AILMENTS) do
+		if before[spec.name] and not after[spec.name] then t_insert(lost, before[spec.name]) end
+	end
+	return #lost > 0 and lost or nil
+end
+-- Config values that count the build's own ailments, for those the config leaves unset.
+-- userSet = the config conditions the player set (left alone). Returns values, list, weak
+-- (inflicted, but under PoB's minimum effect for this enemy, e.g. a 2% shock on a boss: not counted).
+local function ownAilmentConfig(inflicted, userSet)
+	local values, list, weak = {}, {}, {}
+	for _, spec in ipairs(OWN_AILMENTS) do
+		local a = inflicted[spec.name]
+		if a and a.tooWeak and not userSet[spec.cond] then t_insert(weak, a) end
+		if a and not spec.neverAssumed and not userSet[spec.cond] and not a.tooWeak and a.uptime >= 0.5 then
+			values[spec.cond] = true
+			if spec.effectVar and a.effect then
+				a.assumedEffect = m_floor(a.effect * m_min(a.uptime, 1) + 0.5)
+				values[spec.effectVar] = a.assumedEffect
+			end
+			t_insert(list, a)
+		end
+	end
+	return values, list, weak
+end
+-- "you lose your shock (~23% more damage taken), chill and ignite"
+local function lostAilmentText(lost)
+	local parts = {}
+	local input = build.configTab and build.configTab.input or {}
+	for _, a in ipairs(lost or {}) do
+		local size = a.assumedEffect or a.effect
+		if a.tooWeak then
+			t_insert(parts, string.format('%s (only ~%.1f%% on this enemy, under the minimum PoB uses)', a.name:lower(), size or 0))
+		elseif a.name == 'Shock' then
+			t_insert(parts, size and string.format('shock (~%d%% more damage taken)', m_floor(size + 0.5)) or 'shock')
+		elseif a.name == 'Chill' then
+			t_insert(parts, size and string.format('chill (~%d%% slower enemy)', m_floor(size + 0.5)) or 'chill')
+		else
+			t_insert(parts, a.name:lower())
+		end
+	end
+	if #parts == 0 then return nil end
+	local text = #parts == 1 and parts[1] or table.concat(parts, ', ', 1, #parts - 1) .. ' and ' .. parts[#parts]
+	return 'you lose your ' .. text
+end
+local function ownAilmentShared()
+	return { list = OWN_AILMENTS, inflicted = inflictedAilments, lost = lostAilments, config = ownAilmentConfig, lostText = lostAilmentText }
+end
+
 -- Stats -----------------------------------------------------------------------
 -- params: { fields = {names}, match = "lua pattern, case-insensitive" }
 handlers.stats = function(params)
@@ -757,6 +858,20 @@ end
 -- Filled in below (it needs capture/restore).
 local costReport
 
+-- After a change: the ailments the main skill inflicted before and can no longer inflict
+-- (a support such as Elemental Focus). `before` = inflictedAilments() and the main skill's
+-- name read before the change. configStillOn = the config still sets that ailment on the
+-- enemy, so PoB keeps counting it and the DPS after the change is too high.
+local function ailmentReport(before, beforeSkill)
+	if mainSkillName() ~= beforeSkill then return nil end
+	local lost = lostAilments(before, inflictedAilments())
+	if not lost then return nil end
+	local input = build.configTab and build.configTab.input or {}
+	local still = {}
+	for _, a in ipairs(lost) do if input[a.cond] then t_insert(still, a.name) end end
+	return { lost = lost, text = lostAilmentText(lost), configStillOn = #still > 0 and still or nil, skill = beforeSkill }
+end
+
 handlers.key_stats = function(params)
 	return { ok = true, stats = keyStats(params.fields), mainSkill = mainSkillName(), assumptions = assumptions(),
 		name = build.buildName, level = tonumber(build.characterLevel), className = build.spec.curClassName, ascendancy = build.spec.curAscendClassName }
@@ -767,9 +882,11 @@ handlers.edit = function(params)
 	if type(params.ops) ~= 'table' or #params.ops == 0 then return { ok = false, error = 'ops must be a non-empty list' } end
 	local before = keyStats(params.fields)
 	local beforeCost = costWarnings()
+	local beforeAilments, beforeSkill = inflictedAilments(), mainSkillName()
 	local results, failed = applyOps(params.ops)
 	recalc()
 	local res = { ok = true, results = results, failed = failed, before = before, after = keyStats(params.fields), assumptions = assumptions() }
+	res.ailments = ailmentReport(beforeAilments, beforeSkill)
 	res.cost = costReport(beforeCost, function(o) return keyStats(params.fields, o) end)
 	return res
 end
@@ -898,11 +1015,13 @@ handlers.what_if = function(params)
 	local before = keyStats(params.fields)
 	local state = capture()
 	local beforeCost = costWarnings()
+	local beforeAilments, beforeSkill = inflictedAilments(), mainSkillName()
 	local results, failed = applyOps(params.ops)
 	recalc()
 	local after = keyStats(params.fields)
 	local kept = params.keep == true and failed == 0
 	local res = { ok = true, results = results, failed = failed, before = before, after = after, kept = kept, assumptions = assumptions() }
+	res.ailments = ailmentReport(beforeAilments, beforeSkill)
 	res.cost = costReport(beforeCost, function(o) return keyStats(params.fields, o) end)
 	if not kept then
 		local errors = restore(state)
@@ -1202,6 +1321,7 @@ end
 loadfile(DIR .. 'Advice.lua')(handlers, Ops, {
 	num = num, dpsOf = dpsOf, pctChange = pctChange, strip = strip, recalc = recalc, mainOutput = mainOutput,
 	assumptions = assumptions, mainSkillName = mainSkillName, capture = capture, restore = restore,
+	ownAilments = ownAilmentShared(),
 })
 
 -- Character import and progress tracking (Stage 2)
