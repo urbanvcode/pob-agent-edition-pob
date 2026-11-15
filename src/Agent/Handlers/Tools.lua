@@ -577,6 +577,23 @@ local function markChanged(tab)
 	build.buildFlag = true
 end
 
+-- Item lines PoB could not parse (shown in red in the item tooltip): they add nothing to
+-- the numbers. Only lines of the item's selected variant count. nil when every line parsed.
+local function unparsedLines(item)
+	if not item then return nil end
+	local out, seen = {}, {}
+	for _, list in ipairs({ item.enchantModLines, item.scourgeModLines, item.implicitModLines, item.explicitModLines, item.crucibleModLines, item.buffModLines }) do
+		for _, modLine in ipairs(list or {}) do
+			local active = not item.CheckModLineVariant or item:CheckModLineVariant(modLine)
+			if modLine.extra and active and modLine.line and not seen[modLine.line] then
+				seen[modLine.line] = true
+				t_insert(out, strip(modLine.line))
+			end
+		end
+	end
+	return #out > 0 and out or nil
+end
+
 local ops = {}
 
 -- items
@@ -594,7 +611,7 @@ ops.equip = function(o)
 	local res, err = Ops.add_item_text({ text = o.text, slotName = o.slot, noAutoEquip = true })
 	if not res then return nil, err end
 	markChanged(build.itemsTab)
-	return { slot = o.slot, id = res.id, name = strip(res.name) }
+	return { slot = o.slot, id = res.id, name = strip(res.name), unparsed = unparsedLines(build.itemsTab.items[res.id]) }
 end
 ops.unequip = function(o)
 	local slot = build.itemsTab.slots[tostring(o.slot)]

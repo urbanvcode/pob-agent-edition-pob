@@ -2804,6 +2804,25 @@ local specialModList = {
 		flag("LightningCanIgnite"),
 		flag("ChaosCanIgnite"),
 	},
+	-- 3.30 Doedre's Tongue. Special lines only match a whole line, so the "against cursed enemies" forms need their own entries.
+	["all damage can ignite against cursed enemies"] = {
+		flag("PhysicalCanIgnite", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+		flag("ColdCanIgnite", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+		flag("LightningCanIgnite", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+		flag("ChaosCanIgnite", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+	},
+	["all damage can shock against cursed enemies"] = {
+		flag("PhysicalCanShock", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+		flag("FireCanShock", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+		flag("ColdCanShock", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+		flag("ChaosCanShock", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+	},
+	["all damage can freeze against cursed enemies"] = {
+		flag("PhysicalCanFreeze", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+		flag("FireCanFreeze", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+		flag("LightningCanFreeze", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+		flag("ChaosCanFreeze", { type = "ActorCondition", actor = "enemy", var = "Cursed" }),
+	},
 	["all damage with hits can chill"] = {
 		flag("PhysicalCanChill"),
 		flag("FireCanChill"),
