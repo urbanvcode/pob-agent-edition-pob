@@ -1026,6 +1026,36 @@ costReport = function(beforeCost, measure)
 	return rep
 end
 
+-- A tree change found with the fast calculator (no skill-cost check), applied once for
+-- real: the skills it leaves without enough mana to use, and its real result: the blocked
+-- skills switched off, or one reserving skill switched off so everything fits, whichever
+-- scoreOf(keyStats) rates higher. nil when the change blocks nothing new.
+local function treeCostCheck(ops, beforeCost, scoreOf)
+	local s = capture()
+	local results, failed = applyOps(ops)
+	recalc()
+	local okR, rep = true, nil
+	if failed == 0 then okR, rep = pcall(costReport, beforeCost, function(o) return keyStats(nil, o) end) end
+	local errs = restore(s)
+	if #errs > 0 then error('could not restore the build: ' .. table.concat(errs, '; ')) end
+	if not okR or not rep then return nil end
+	local names, texts = {}, {}
+	for _, w in ipairs(rep.warnings) do t_insert(names, w.skill); t_insert(texts, w.text) end
+	local best, bestScore
+	if rep.blockedOff then
+		best, bestScore = { stats = rep.blockedOff.stats, ops = rep.blockedOff.ops, text = 'stop using ' .. table.concat(names, ', ') .. ' (not enough mana left for it)' }, scoreOf(rep.blockedOff.stats)
+	end
+	for _, opt in ipairs(rep.options) do
+		if opt.fits then
+			local sc = scoreOf(opt.stats)
+			if not best or sc > bestScore then
+				best, bestScore = { stats = opt.stats, ops = opt.ops, text = 'switch off ' .. opt.skill .. (opt.freed and (' (frees ' .. opt.freed .. ' mana)') or '') }, sc
+			end
+		end
+	end
+	return { names = names, warnings = texts, overReserved = rep.overReserved, fix = best }
+end
+
 -- params: { ops, keep = bool, fields }
 handlers.what_if = function(params)
 	if type(params.ops) ~= 'table' or #params.ops == 0 then return { ok = false, error = 'ops must be a non-empty list' } end
@@ -1144,10 +1174,47 @@ handlers.suggest_passives = function(params)
 	table.sort(passives, byValue)
 	table.sort(ascendancy, byValue)
 	local limit = m_min(m_max(tonumber(params.limit) or 10, 1), 30)
-	while #passives > limit do table.remove(passives) end
-	while #ascendancy > 4 do table.remove(ascendancy) end
+	-- The fast calculator has no skill-cost check: each passive about to be listed is applied
+	-- once for real. One that leaves a skill without mana to use is listed with its real result
+	-- (with the best fix in its ops), or under manaBlocked when no fix leaves a gain.
+	local baseKS, baseCost = keyStats(), costWarnings()
+	local function realScore(st)
+		local d, e = pctChange(dpsOf(st), dpsOf(baseKS)), pctChange(num(st.TotalEHP) or 0, num(baseKS.TotalEHP) or 0)
+		return focus == 'dps' and d or (focus == 'defence' and e or (d + 0.6 * e)), d, e
+	end
+	local manaBlocked = {}
+	local function checked(list, cap)
+		local out, checks = {}, 0
+		for _, c in ipairs(list) do
+			if #out >= cap or checks >= cap + 8 then break end
+			checks = checks + 1
+			local op = c.effect and { op = 'mastery', node = c.id, effect = c.effect } or { op = 'alloc', node = c.id }
+			local okC, chk = pcall(treeCostCheck, { op }, baseCost, realScore)
+			if not okC then error(chk) end
+			if not chk then
+				t_insert(out, c)
+			else
+				local s, d, e
+				if chk.fix then s, d, e = realScore(chk.fix.stats) end
+				if s and s > 0.05 then
+					c.paper = { dpsPct = c.dpsPct, ehpPct = c.ehpPct, score = c.score }
+					c.dpsPct, c.ehpPct, c.score, c.value = d, e, s, s / m_max(c.points, 1)
+					c.costWarnings, c.costFix = chk.warnings, { text = chk.fix.text, ops = chk.fix.ops }
+					t_insert(out, c)
+				else
+					t_insert(manaBlocked, { id = c.id, name = c.name, points = c.points, paperDpsPct = c.dpsPct, paperEhpPct = c.ehpPct, warnings = chk.warnings,
+						why = 'leaves ' .. table.concat(chk.names, ', ') .. ' without enough mana to use' .. (chk.fix and (string.format(': real result %+.1f%% DPS even with the best fix (%s)', d, chk.fix.text)) or ' and no single reserving skill to switch off makes it fit') })
+				end
+			end
+		end
+		table.sort(out, byValue)
+		return out
+	end
+	passives = checked(passives, limit)
+	ascendancy = checked(ascendancy, 4)
 	local tree = treeSummary()
 	return { ok = true, suggestions = passives, ascendancy = #ascendancy > 0 and ascendancy or nil, ascendancyInfo = handlers.ascendancy_points(),
+		manaBlocked = #manaBlocked > 0 and manaBlocked or nil,
 		evaluated = evaluated, focus = focus, maxPoints = maxPoints, pointsFree = tree.pointsAtLevel - tree.pointsUsed, assumptions = assumptions() }
 end
 

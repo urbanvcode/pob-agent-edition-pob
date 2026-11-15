@@ -270,12 +270,31 @@ local function gain(before, after)
 	}
 end
 
+-- A change that leaves a skill without enough mana to use (what_if's cost report): the
+-- gain is its real result, the blocked skills switched off, or (over-reserved) the one
+-- reserving skill whose switch-off fits everything and keeps most DPS; the paper DPS and
+-- the warning lines go with it (agent-mcp prints "BREAKS A SKILL").
+local function realGain(before, after, cost)
+	local real, fix = cost.blockedOff and cost.blockedOff.stats, nil
+	if not real then
+		for _, opt in ipairs(cost.options or {}) do
+			if opt.fits and (not real or dpsOf(opt.stats) > dpsOf(real)) then real, fix = opt.stats, 'switch off ' .. opt.skill end
+		end
+	end
+	local paper = gain(before, after)
+	local g = real and gain(before, real) or paper
+	g.costWarnings, g.paperDpsPct, g.costFix = {}, paper.dpsPct, fix
+	for _, w in ipairs(cost.warnings or {}) do t_insert(g.costWarnings, w.text) end
+	if not real then g.score, g.unusable = nil, true end
+	return g
+end
+
 -- One what_if (applies ops, measures, rolls back): the gain of a set of ops.
 local function sim(ops)
 	if #ops == 0 then return nil end
 	local res = handlers.what_if({ ops = ops })
 	if not res.ok then return { error = res.error } end
-	local g = gain(res.before, res.after)
+	local g = res.cost and realGain(res.before, res.after, res.cost) or gain(res.before, res.after)
 	local failed = {}
 	for _, r in ipairs(res.results or {}) do if not r.ok then t_insert(failed, r.error) end end
 	if #failed > 0 then g.failed = failed end
@@ -474,6 +493,31 @@ local function treeGap(guide, skip, simulate, maxSteps, levelling)
 		local flags = { build.modFlag, spec.modFlag, build.treeTab.modFlag }
 		local before = stats()
 		local first = before
+		-- Skills short of mana before the path are not the path's doing; each step is
+		-- checked for the ones it adds (the fast numbers still count a blocked skill).
+		local okCW, cw0 = pcall(handlers.cost_warnings)
+		local hadCost = {}
+		for _, w in ipairs(okCW and cw0 and cw0.warnings or {}) do hadCost[w.skill .. '|' .. w.resource] = true end
+		local function stepGain(now)
+			local okW, cw = pcall(handlers.cost_warnings)
+			local fresh = {}
+			for _, w in ipairs(okW and cw and cw.warnings or {}) do
+				local k = w.skill .. '|' .. w.resource
+				if not hadCost[k] then hadCost[k] = true; t_insert(fresh, w) end
+			end
+			if #fresh == 0 then return gain(before, now) end
+			-- The real result: the newly blocked skills switched off for this measurement.
+			local off = {}
+			for _, w in ipairs(fresh) do
+				if w.group and w.gem and Ops.set_gem_enabled({ groupIndex = w.group, gemIndex = w.gem, enabled = false }) then t_insert(off, w) end
+			end
+			recalc()
+			local g = realGain(before, now, { blockedOff = #off > 0 and { stats = stats() } or nil, warnings = fresh })
+			for _, w in ipairs(off) do Ops.set_gem_enabled({ groupIndex = w.group, gemIndex = w.gem, enabled = true }) end
+			recalc()
+			return g
+		end
+		local skillsFlag = build.skillsTab.modFlag
 		local ok, err = pcall(function()
 			for i, step in ipairs(plan) do
 				if i > limit then break end
@@ -510,7 +554,7 @@ local function treeGap(guide, skip, simulate, maxSteps, levelling)
 				end
 				recalc()
 				local now = stats()
-				step.gain = gain(before, now)
+				step.gain = stepGain(now)
 				before = now
 			end
 			if #out.extra > 0 and not levelling then
@@ -520,7 +564,7 @@ local function treeGap(guide, skip, simulate, maxSteps, levelling)
 				end
 				recalc()
 				local now = stats()
-				out.removeExtra = gain(before, now)
+				out.removeExtra = stepGain(now)
 				before = now
 			end
 			out.all = gain(first, before)
@@ -528,6 +572,7 @@ local function treeGap(guide, skip, simulate, maxSteps, levelling)
 		spec:RestoreUndoState(undo)
 		recalc()
 		build.modFlag, spec.modFlag, build.treeTab.modFlag = flags[1], flags[2], flags[3]
+		build.skillsTab.modFlag = skillsFlag
 		if not ok then out.simError = tostring(err) end
 	end
 	out.steps = plan
@@ -750,6 +795,8 @@ end
 -- resistance that is still under its cap (minus 2 per point lost).
 local function score(gn, f)
 	if not gn or gn.error then return nil end
+	-- Leaves a skill without mana and nothing fits: no real result to rank.
+	if gn.unusable then gn.score = 0 return 0 end
 	local v = f.wDps * (gn.dpsPct or 0) + f.wEhp * (gn.ehpPct or 0)
 	for k, miss in pairs(f.resMissing or {}) do
 		local add = gn.res and gn.res[k] or 0
