@@ -1335,6 +1335,12 @@ function buildMode:OnFrame(inputEvents)
 		self.guideTab:Draw(tabViewPort, inputEvents)
 	end
 
+	-- Agent Edition: "point at it" marks from the AI (Agent/Marks.lua), drawn over the tab
+	if self.agentMarks and self.agentMarksModule then
+		local errMsg = PCall(self.agentMarksModule.Draw, self, tabViewPort, inputEvents)
+		if errMsg then ConPrintf("[Agent] marks: %s", errMsg) self.agentMarks = nil end
+	end
+
 	-- Draw overlay panes on top of all tab content (last = topmost)
 	for _, pane in ipairs(self.overlayPanes) do
 		if pane.isOverlay then

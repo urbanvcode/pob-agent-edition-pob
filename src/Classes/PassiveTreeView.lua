@@ -167,6 +167,12 @@ function PassiveTreeViewClass:GetCompareNodeColor(node, compareNode, spec, build
 	if not compareNode then
 		return nodeDefaultColor
 	end
+	-- Agent Edition: colour by simulated gain (Agent/TreePlanPanel.lua), when switched on
+	local labels = self.compareLabels
+	if labels and labels.nodeColour then
+		local r, g, b = labels.nodeColour(labels, node.id)
+		if r then return r, g, b end
+	end
 	if compareNode.alloc and not node.alloc then
 		return 0, 1, 0
 	elseif not compareNode.alloc and node.alloc then
@@ -1040,6 +1046,7 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 			local size = m_floor(node.size * scale)
 			if self.tooltip:CheckForUpdate(node, self.showStatDifferences, self.tracePath, launch.devModeAlt, build.outputRevision, build.spec.allocMode) then
 				self:AddNodeTooltip(self.tooltip, node, build)
+				if self.compareSpec and self.compareLabels and self.compareLabels.tooltip then self.compareLabels.tooltip(self.compareLabels, self.tooltip, node.id) end
 			end
 			self.tooltip.center = true
 			local ttWidth, ttHeight = self.tooltip:GetDynamicSize(viewPort)
@@ -1108,6 +1115,10 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 				local scrX, scrY = treeToScreen(compareNode.x, compareNode.y)
 				-- Draw base artwork with green coloring (compare-only = "added" nodes)
 				SetDrawColor(0, 1, 0)
+				if self.compareLabels and self.compareLabels.nodeColour then
+					local r, g, b = self.compareLabels.nodeColour(self.compareLabels, nodeId)
+					if r then SetDrawColor(r, g, b) end
+				end
 				local state = "alloc"
 				local base, overlay
 				if compareNode.type == "Socket" then
@@ -1145,6 +1156,7 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 					local size = m_floor(compareNode.size * scale)
 					if self.tooltip:CheckForUpdate(compareNode, false, nil, launch.devModeAlt, build.outputRevision) then
 						self:AddCompareNodeTooltip(self.tooltip, compareNode, build)
+						if self.compareLabels and self.compareLabels.tooltip then self.compareLabels.tooltip(self.compareLabels, self.tooltip, compareNode.id) end
 					end
 					self.tooltip.center = true
 					self.tooltip:Draw(m_floor(scrX - size), m_floor(scrY - size), size * 2, size * 2, viewPort)
@@ -1157,6 +1169,11 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 	-- Agent Edition: labelled boxes next to the changed nodes (Agent/TreePlanPanel.lua)
 	if self.compareSpec and self.compareLabels then
 		self.compareLabels.draw(self.compareLabels, spec, self.compareSpec, treeToScreen, scale, viewPort)
+		SetDrawLayer(nil, 25)
+	end
+	-- Agent Edition: "point at it" marks on the tree (Agent/Marks.lua)
+	if build.agentMarks and build.agentMarksModule then
+		build.agentMarksModule.DrawTree(build, spec, treeToScreen, scale, viewPort, inputEvents)
 		SetDrawLayer(nil, 25)
 	end
 

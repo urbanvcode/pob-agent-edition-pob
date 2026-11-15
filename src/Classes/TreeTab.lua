@@ -117,6 +117,10 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 			self:OpenCompareBuildPopup()
 		elseif value == "Last sync" then
 			self:CompareLastSync()
+		elseif value == "Guide..." then
+			self:OpenCompareGuidePopup()
+		elseif value == "Paste code/link..." then
+			self:OpenComparePastePopup()
 		end
 	end)
 	self.controls.compareSelect.shown = false
@@ -475,7 +479,9 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 	local compareList = copyTable(newSpecList)
 	if self.agentCompare then t_insert(compareList, "^x9FB8D0" .. self.agentCompare.title) end
 	t_insert(compareList, "Other build...")
+	t_insert(compareList, "Guide...")
 	t_insert(compareList, "Last sync")
+	t_insert(compareList, "Paste code/link...")
 	self.controls.compareSelect.selIndex = self.compareExtra and #newSpecList + 1 or self.activeCompareSpec
 	self.controls.compareSelect:SetList(compareList)
 	t_insert(newSpecList, "Manage trees... (ctrl-m)")
@@ -644,14 +650,20 @@ function TreeTabClass:CompareTitle()
 	return spec and (spec.title or "Default") or "?"
 end
 
--- Load another build's tree as the temporary compare tree (not added to this build).
-function TreeTabClass:CompareWithXml(xml, title)
+-- Load another build's tree as the temporary compare tree (not added to this build, never saved).
+-- spec = a stage / loadout / tree of that build by title or number (default: its active tree).
+-- Another class is allowed: the planner lists the node differences and says the class differs.
+function TreeTabClass:CompareWithXml(xml, title, spec)
 	local ok, entry = pcall(new, "CompareEntry", xml, title)
 	if not ok or not entry or not entry.spec then return nil, "could not load " .. tostring(title) .. ": " .. tostring(entry) end
-	if entry.spec.curClassId ~= self.build.spec.curClassId then
-		return nil, tostring(title) .. " is a " .. tostring(entry.spec.curClassName) .. " tree; this build is " .. tostring(self.build.spec.curClassName)
+	local chosen, stageTitle = entry.spec, nil
+	local server = launch and launch.agentServer
+	if spec ~= nil and spec ~= "" and server and server.handlers and server.handlers._pickSpec then
+		chosen, stageTitle = server.handlers._pickSpec(entry, spec)
+		if not chosen then return nil, stageTitle end
 	end
-	self.agentCompare = { spec = entry.spec, entry = entry, title = title }
+	if stageTitle then title = title .. " / " .. stageTitle end
+	self.agentCompare = { spec = chosen, entry = entry, title = title }
 	self.compareExtra = true
 	self:SetComparing(true)
 	return true
@@ -694,6 +706,82 @@ function TreeTabClass:OpenCompareBuildPopup()
 	main:OpenPopup(460, 125, "Compare with another build", controls, "go", nil, "cancel")
 end
 
+-- "Guide...": a guide build ("Guide - <name>" in the Builds folder) and one of its stages.
+function TreeTabClass:OpenCompareGuidePopup()
+	local TreeDiff = LoadModule("Agent/TreeDiff")
+	local guides = { }
+	for _, f in ipairs(TreeDiff.buildFiles(main.buildPath)) do
+		if f.name:match("^Guide %- ") or f.name:match("/Guide %- ") then t_insert(guides, f) end
+	end
+	if #guides == 0 then
+		main:OpenMessagePopup("Guide", "^7No guide yet. Import one in the Guide tab, or ask the AI (guide { source }).")
+		return
+	end
+	local names = { }
+	for _, g in ipairs(guides) do t_insert(names, g.name) end
+	local controls = { }
+	local function stagesOf(index)
+		local text = TreeDiff.readFile(guides[index] and guides[index].file) or ""
+		local list = { }
+		for title in text:gmatch('<Spec [^>]-title="([^"]*)"') do t_insert(list, title) end
+		if #list == 0 then list = { "(its tree)" } end
+		return list
+	end
+	controls.label = new("LabelControl", nil, { 0, 30, 0, 16 }, "^7Compare the active tree with a guide stage:")
+	controls.stage = new("DropDownControl", nil, { 0, 85, 420, 20 }, stagesOf(1))
+	controls.guide = new("DropDownControl", nil, { 0, 55, 420, 20 }, names, function(index)
+		controls.stage:SetList(stagesOf(index))
+		controls.stage.selIndex = 1
+	end)
+	controls.go = new("ButtonControl", nil, { -60, 120, 100, 20 }, "Compare", function()
+		local g = guides[controls.guide.selIndex]
+		local stage = controls.stage.list[controls.stage.selIndex]
+		main:ClosePopup()
+		local xml = g and TreeDiff.readFile(g.file)
+		local ok, err = xml, "could not read " .. tostring(g and g.file)
+		if xml then ok, err = self:CompareWithXml(xml, g.name, stage ~= "(its tree)" and controls.stage.selIndex or nil) end
+		if not ok then main:OpenMessagePopup("Guide", "^7" .. tostring(err)) end
+	end)
+	controls.cancel = new("ButtonControl", nil, { 60, 120, 100, 20 }, "Cancel", function() main:ClosePopup() end)
+	main:OpenPopup(460, 155, "Compare with a guide", controls, "go", nil, "cancel")
+end
+
+-- "Paste code/link...": a PoB code, or a link PoB's own importer knows (pobb.in, poe.ninja,
+-- pastebin, maxroll...; Modules/BuildSiteTools.lua). Loaded for comparing only, never saved.
+function TreeTabClass:ComparePasted(text, done)
+	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	local function finish(ok, err) if done then done(ok, err) end return ok, err end
+	if text == "" then return finish(nil, "nothing pasted") end
+	for _, site in ipairs(buildSites and buildSites.websiteList or { }) do
+		if text:match(site.matchURL) then
+			buildSites.DownloadBuild(text, site, function(isSuccess, data)
+				if not isSuccess then return finish(nil, "could not download " .. text .. ": " .. tostring(data)) end
+				return finish(self:ComparePasted(data))
+			end)
+			return true
+		end
+	end
+	if text:match("^https?://") then return finish(nil, "PoB does not know that site; paste the build code instead") end
+	local xml = text:match("^<") and text or Inflate(common.base64.decode(text:gsub("-", "+"):gsub("_", "/")))
+	if not xml or xml == "" then return finish(nil, "that is not a PoB build code") end
+	return finish(self:CompareWithXml(xml, "Pasted build"))
+end
+
+function TreeTabClass:OpenComparePastePopup()
+	local controls = { }
+	controls.label = new("LabelControl", nil, { 0, 30, 0, 16 }, "^7Paste a PoB code or a build link (pobb.in, poe.ninja, pastebin, maxroll...):")
+	controls.code = new("EditControl", nil, { 0, 55, 480, 20 }, "", nil, nil, nil, nil, nil, nil, true)
+	controls.go = new("ButtonControl", nil, { -60, 90, 100, 20 }, "Compare", function()
+		local text = controls.code.buf
+		main:ClosePopup()
+		self:ComparePasted(text, function(ok, err)
+			if not ok then main:OpenMessagePopup("Paste code/link", "^7" .. tostring(err)) end
+		end)
+	end)
+	controls.cancel = new("ButtonControl", nil, { 60, 90, 100, 20 }, "Cancel", function() main:ClosePopup() end)
+	main:OpenPopup(520, 125, "Compare with a code or link", controls, "go", "code", "cancel")
+end
+
 -- For the AI (set_view { view: "TREE", compare }): params.compare = spec index or title,
 -- or params.xml + params.title (another build / last sync), params.off = true to stop.
 function TreeTabClass:AgentCompare(params)
@@ -703,7 +791,7 @@ function TreeTabClass:AgentCompare(params)
 		return true
 	end
 	if type(params.xml) == "string" then
-		local ok, err = self:CompareWithXml(params.xml, params.title or "Other build")
+		local ok, err = self:CompareWithXml(params.xml, params.title or "Other build", params.spec)
 		if not ok then return nil, err end
 		return true
 	end
