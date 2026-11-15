@@ -518,7 +518,7 @@ end
 function Marks.Draw(build, viewPort, inputEvents)
 	local list = build.agentMarks
 	if not list or #list == 0 then return end
-	SetDrawLayer(nil, 90)
+	SetDrawLayer(3, 0)
 	local cx, cy = GetCursorPos()
 	local hits = { }
 	local visible = Marks.Visible(build)
@@ -561,7 +561,7 @@ function Marks.DrawAgain(build, viewPort, inputEvents)
 	local label = "Show AI marks again"
 	local w = DrawStringWidth(14, "VAR", label) + 16
 	local r = { x = viewPort.x + viewPort.width - w - 8, y = viewPort.y + 6, w = w, h = 22 }
-	SetDrawLayer(nil, 90)
+	SetDrawLayer(3, 0)
 	local c = Marks.TONES.none
 	SetDrawColor(c[1], c[2], c[3], 0.7)
 	DrawImage(nil, r.x, r.y, r.w, r.h)
